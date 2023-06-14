@@ -1,0 +1,49 @@
+name: publish
+on:
+  workflow_dispatch: # manually run
+    inputs:
+      releaseTag:
+        description: 'Tag the release (next, latest)'
+        required: false
+        default: 'latest'
+
+env:
+  CI: true
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-20.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Use Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16.x'
+
+      - name: Authenticate with Registry
+        run: |
+          echo "always-auth=true" > .npmrc
+          echo "@subsquid:registry=https://registry.npmjs.org/" >> .npmrc
+          echo "registry=https://registry.npmjs.org/" >> .npmrc
+          echo "//registry.npmjs.org/:_authToken=$NPM_AUTH_TOKEN" >> .npmrc
+          npm whoami
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+
+      - name: npm install
+        run: |
+          npm i
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+
+      - name: npm build
+        run: npm run build
+
+      - name: npm publish
+        run: |
+          npm publish --tag $RELEASE_TAG --access public
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.releaseTag }}

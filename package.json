@@ -1,0 +1,22 @@
+{
+  "name": "@belopash/squid-tools",
+  "version": "0.0.0",
+  "description": "",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "@subsquid/util-internal": "^2.3.0",
+    "copy-anything": "^3.0.5",
+    "graph-data-structure": "^3.3.0"
+  },
+  "peerDependencies": {
+    "@subsquid/typeorm-store": "^1.2.0",
+    "typeorm": "^0.3.16"
+  },
+  "devDependencies": {
+    "@types/node": "^20.3.1",
+    "typescript": "~5.0.2"
+  }
+}
