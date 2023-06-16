@@ -20,7 +20,7 @@ export class StoreWithCache extends Store {
     }
 
     private get _em(): EntityManager {
-        return super['em']()
+        return this['em']()
     }
 
     private deferMap: Map<string, DeferData<any>> = new Map()
@@ -388,3 +388,4 @@ export class StoreDeferredValue<E extends Entity> {
         return e
     }
 }
+
