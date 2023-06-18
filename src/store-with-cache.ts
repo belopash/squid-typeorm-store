@@ -182,7 +182,15 @@ export class StoreWithCache extends Store {
         entityClass: EntityClass<E>,
         optionsOrId: string | FindOneOptions<E>
     ): Promise<E> {
-        return await this.get(entityClass, optionsOrId).then(assertNotNull)
+        let e = await this.get(entityClass, optionsOrId)
+
+        let mes = `missing entity ${entityClass.name}`
+        if (typeof optionsOrId === 'string') {
+            mes += ` with id "${optionsOrId}"`
+        }
+        assert(e != null, mes)
+
+        return e
     }
 
     defer<E extends Entity>(
@@ -375,7 +383,7 @@ function mergeRelataions<E extends Entity>(
 }
 
 export class StoreDeferredValue<E extends Entity> {
-    constructor(private store: Store, private entityClass: EntityClass<E>, private id: string) {}
+    constructor(private store: StoreWithCache, private entityClass: EntityClass<E>, private id: string) {}
 
     @def
     async get(): Promise<E | undefined> {
@@ -383,9 +391,6 @@ export class StoreDeferredValue<E extends Entity> {
     }
 
     async getOrFail(): Promise<E> {
-        let e = await this.get()
-        assert(e != null, `missing entity ${this.entityClass.name} with id "${this.id}"`)
-        return e
+        return await this.store.getOrFail(this.entityClass, this.id)
     }
 }
-
