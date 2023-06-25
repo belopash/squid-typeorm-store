@@ -240,7 +240,9 @@ export class StoreWithCache extends Store {
             _cacheMap.set(id, null)
         }
 
-        await this.find<any>(entityClass, {where: {id: In([..._deferData.ids])}, relations: _deferData.relations})
+        for (let batch of splitIntoBatches([..._deferData.ids], 30000)) {
+            await this.find<any>(entityClass, {where: {id: In(batch)}, relations: _deferData.relations})
+        }
 
         this.deferMap.delete(entityClass.name)
     }
@@ -392,5 +394,18 @@ export class StoreDeferredValue<E extends Entity> {
 
     async getOrFail(): Promise<E> {
         return await this.store.getOrFail(this.entityClass, this.id)
+    }
+}
+
+function* splitIntoBatches<T>(list: T[], maxBatchSize: number): Generator<T[]> {
+    if (list.length <= maxBatchSize) {
+        yield list
+    } else {
+        let offset = 0
+        while (list.length - offset > maxBatchSize) {
+            yield list.slice(offset, offset + maxBatchSize)
+            offset += maxBatchSize
+        }
+        yield list.slice(offset)
     }
 }
