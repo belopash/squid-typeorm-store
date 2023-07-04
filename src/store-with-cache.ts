@@ -197,7 +197,7 @@ export class StoreWithCache extends Store {
         entityClass: EntityClass<E>,
         id: string,
         relations?: FindOptionsRelations<E>
-    ): StoreDeferredValue<E> {
+    ): DeferredEntity<E> {
         this.classes.set(entityClass.name, entityClass)
 
         const _deferredList = this.getDeferData(entityClass.name)
@@ -205,7 +205,7 @@ export class StoreWithCache extends Store {
         _deferredList.relations =
             relations != null ? mergeRelataions(_deferredList.relations, relations) : _deferredList.relations
 
-        return new StoreDeferredValue(this, entityClass, id)
+        return new DeferredEntity(this, entityClass, id)
     }
 
     async flush<E extends Entity>(entityClass?: EntityClass<E>): Promise<void> {
@@ -231,6 +231,8 @@ export class StoreWithCache extends Store {
     }
 
     private async load<E extends Entity>(entityClass: EntityClass<E>): Promise<void> {
+        console.log(entityClass)
+
         const _deferData = this.getDeferData<E>(entityClass.name)
         if (_deferData.ids.size === 0) return
 
@@ -384,10 +386,9 @@ function mergeRelataions<E extends Entity>(
     return mergedObject
 }
 
-export class StoreDeferredValue<E extends Entity> {
+export class DeferredEntity<E extends Entity> {
     constructor(private store: StoreWithCache, private entityClass: EntityClass<E>, private id: string) {}
 
-    @def
     async get(): Promise<E | undefined> {
         return await this.store.get(this.entityClass, this.id)
     }

@@ -13,7 +13,7 @@
     "graph-data-structure": "^3.3.0"
   },
   "peerDependencies": {
-    "@subsquid/typeorm-store": "^1.2.0",
+    "@subsquid/typeorm-store": "^1.2.1",
     "typeorm": "^0.3.16"
   },
   "devDependencies": {
