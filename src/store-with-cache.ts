@@ -231,8 +231,6 @@ export class StoreWithCache extends Store {
     }
 
     private async load<E extends Entity>(entityClass: EntityClass<E>): Promise<void> {
-        console.log(entityClass)
-
         const _deferData = this.getDeferData<E>(entityClass.name)
         if (_deferData.ids.size === 0) return
 
