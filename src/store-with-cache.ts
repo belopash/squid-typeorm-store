@@ -1,7 +1,7 @@
 import assert from 'assert'
 import {copy} from 'copy-anything'
 import {Graph} from 'graph-data-structure'
-import {EntityManager, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
+import {EntityManager, EntityMetadata, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
 import {EntityClass, FindManyOptions, FindOneOptions, Store, Entity as _Entity} from '@subsquid/typeorm-store'
 import {def} from '@subsquid/util-internal'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
@@ -200,6 +200,11 @@ export class StoreWithCache extends Store {
     ): DeferredEntity<E> {
         this.classes.set(entityClass.name, entityClass)
 
+        if (relations != null) {
+            const metadata = this.getMetadata(entityClass)
+            this.validateDeferredRelations(metadata, relations)
+        }
+
         const _deferredList = this.getDeferData(entityClass.name)
         _deferredList.ids.add(id)
         _deferredList.relations =
@@ -208,25 +213,76 @@ export class StoreWithCache extends Store {
         return new DeferredEntity(this, entityClass, id)
     }
 
+    private validateDeferredRelations(metadata: EntityMetadata, relations: FindOptionsRelations<any>) {
+        for (const relationMetadata of metadata.relations) {
+            const mask = relations[relationMetadata.propertyName]
+            if (mask == null) continue
+
+            assert(!relationMetadata.isOneToMany, `OneToMany relation fields can not be deferred`)
+            assert(!relationMetadata.isOneToOneNotOwner, `OneToOne relation fields of not owner can not be deferred`)
+
+            if (typeof mask === 'object') {
+                this.validateDeferredRelations(relationMetadata.inverseEntityMetadata, mask)
+            }
+        }
+    }
+
     async flush<E extends Entity>(entityClass?: EntityClass<E>): Promise<void> {
         const entityOrder = await this.getTopologicalOrder()
 
+        // let lastEntity: string | undefined
+        // if (entityClass != null) {
+        //     const metadata = this.getMetadata(entityClass)
+
+        //     if (
+        //         metadata.oneToOneRelations.filter((r) => !r.isOwning).length > 0 ||
+        //         metadata.oneToManyRelations.length > 0
+        //     ) {
+        //         lastEntity = undefined
+        //     } else {
+        //         lastEntity = metadata.name
+        //     }
+        // }
+
         for (const name of entityOrder) {
-            const _insertList = this.getInsertList(name)
-            if (_insertList.size > 0) {
-                const entities = _insertList.values()
-                await super.insert([...entities])
-            }
-            _insertList.clear()
+            const inserts = this.getInsertList(name)
+            const upserts = this.getUpsertList(name)
+            const delayedUpserts = new Map<string, Entity>()
 
-            const _upsertList = this.getUpsertList(name)
-            if (_upsertList.size > 0) {
-                const entities = _upsertList.values()
+            const metadata = this._em.connection.getMetadata(name)
+            const selfRelations = metadata.manyToOneRelations.filter(
+                (r) => r.inverseEntityMetadata.name === metadata.name
+            )
+            if (selfRelations.length > 0) {
+                for (const [id, entity] of upserts) {
+                    for (const relation of selfRelations) {
+                        const value = relation.getEntityValue(entity)
+                        if (value != null && inserts.has(value.id)) {
+                            delayedUpserts.set(id, entity)
+                            upserts.delete(id)
+                            break
+                        }
+                    }
+                }
+            }
+
+            if (upserts.size > 0) {
+                const entities = upserts.values()
                 await super.upsert([...entities])
+                upserts.clear()
             }
-            _upsertList.clear()
 
-            if (entityClass && entityClass.name === name) break
+            if (inserts.size > 0) {
+                const entities = inserts.values()
+                await super.insert([...entities])
+                inserts.clear()
+            }
+
+            if (delayedUpserts.size > 0) {
+                const entities = delayedUpserts.values()
+                await super.upsert([...entities])
+                inserts.clear()
+            }
         }
     }
 
@@ -247,9 +303,13 @@ export class StoreWithCache extends Store {
         this.deferMap.delete(entityClass.name)
     }
 
-    private cache<E extends Entity>(entity: E, relations?: FindOptionsRelations<any>): Promise<E>
-    private cache<E extends Entity>(entities: E[], relations?: FindOptionsRelations<any>): Promise<E[]>
-    private async cache<E extends Entity>(e: E | E[], relations: FindOptionsRelations<any> = {}) {
+    private getMetadata<E>(entityClass: EntityClass<E>): EntityMetadata {
+        return this._em.connection.getMetadata(entityClass)
+    }
+
+    private cache<E extends Entity>(entity: E, relations?: FindOptionsRelations<any>): E
+    private cache<E extends Entity>(entities: E[], relations?: FindOptionsRelations<any>): E[]
+    private cache<E extends Entity>(e: E | E[], relations: FindOptionsRelations<any> = {}) {
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
@@ -260,38 +320,34 @@ export class StoreWithCache extends Store {
             const cached = _cacheMap.get(entity.id) || (new constructor() as Entity)
             _cacheMap.set(entity.id, cached)
 
-            const metadata = this._em.connection.entityMetadatasMap.get(entity.constructor)
-            assert(metadata != null, `Missing metadata for ${entity.constructor.name}`)
+            const metadata = this.getMetadata(constructor)
             for (const column of metadata.columns) {
+                if (column.relationMetadata) continue
                 const propertyName = column.propertyName
-                if (column.relationMetadata) {
-                    const relationMetadata = column.relationMetadata
-                    const relationPropertyName = relationMetadata.propertyName
-                    const mask = relations[relationPropertyName]
-                    if (relationPropertyName in entity) {
-                        const relation = entity[relationPropertyName]
-                        if (relation == null) {
-                            cached[relationPropertyName] = undefined
-                        } else if (mask) {
-                            assert(!relationMetadata.isOneToMany, `OneToMany relations can't be cached`)
-                            cached[relationPropertyName] = await this.cache(relation, mask === true ? {} : mask)
-                        } else if (
-                            cached[relationPropertyName] == null ||
-                            cached[relationPropertyName].id !== relation.id
-                        ) {
-                            const _relationCacheMap = this.getCacheMap(relation.constructor.name)
-                            const relationConstructor = relation.constructor as any
-                            cached[relationPropertyName] =
-                                _relationCacheMap.get(relation.id) ||
-                                (await this.cache(new relationConstructor({id: relation.id})))
-                        }
-                    }
+                cached[propertyName] = entity[propertyName]
+            }
 
-                    if (propertyName != relationPropertyName) {
-                        cached[propertyName] = entity[propertyName]
+            for (const relationMetadata of metadata.relations) {
+                if (!relationMetadata.isOwning) continue
+
+                const relationPropertyName = relationMetadata.propertyName
+                if (!(relationPropertyName in entity)) continue
+
+                const mask = relations[relationPropertyName]
+                const relation = entity[relationPropertyName]
+
+                if (relation == null) {
+                    cached[relationPropertyName] = null
+                } else if (mask) {
+                    cached[relationPropertyName] = this.cache(relation, mask === true ? {} : mask)
+                } else if (cached[relationPropertyName] == null || cached[relationPropertyName].id !== relation.id) {
+                    const _relationCacheMap = this.getCacheMap(relation.constructor.name)
+                    const relationConstructor = relation.constructor as any
+                    let cachedRelation = _relationCacheMap.get(relation.id)
+                    if (cachedRelation == null) {
+                        cachedRelation = this.cache(new relationConstructor({id: relation.id}))
                     }
-                } else {
-                    cached[propertyName] = entity[propertyName]
+                    cached[relationPropertyName] = cachedRelation
                 }
             }
 
