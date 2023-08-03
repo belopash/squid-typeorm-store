@@ -317,41 +317,61 @@ export class StoreWithCache extends Store {
         const cachedEntities: Entity[] = []
         for (const entity of entities) {
             const constructor = entity.constructor as any
-            const cached = _cacheMap.get(entity.id) || (new constructor() as Entity)
-            _cacheMap.set(entity.id, cached)
+            let cachedEntity = _cacheMap.get(entity.id)
+            if (cachedEntity == null) {
+                cachedEntity = new constructor({id: entity.id}) as Entity
+                _cacheMap.set(entity.id, cachedEntity)
+            }
 
             const metadata = this.getMetadata(constructor)
             for (const column of metadata.columns) {
                 if (column.relationMetadata) continue
+
                 const propertyName = column.propertyName
-                cached[propertyName] = entity[propertyName]
+                cachedEntity[propertyName] = entity[propertyName]
             }
 
             for (const relationMetadata of metadata.relations) {
-                if (!relationMetadata.isOwning) continue
-
                 const relationPropertyName = relationMetadata.propertyName
                 if (!(relationPropertyName in entity)) continue
 
-                const mask = relations[relationPropertyName]
                 const relation = entity[relationPropertyName]
 
-                if (relation == null) {
-                    cached[relationPropertyName] = null
-                } else if (mask) {
-                    cached[relationPropertyName] = this.cache(relation, mask === true ? {} : mask)
-                } else if (cached[relationPropertyName] == null || cached[relationPropertyName].id !== relation.id) {
-                    const _relationCacheMap = this.getCacheMap(relation.constructor.name)
-                    const relationConstructor = relation.constructor as any
-                    let cachedRelation = _relationCacheMap.get(relation.id)
-                    if (cachedRelation == null) {
-                        cachedRelation = this.cache(new relationConstructor({id: relation.id}))
+                let mask = relations[relationPropertyName]
+                mask = mask === true ? {} : mask === false ? undefined : mask
+
+                if (relationMetadata.isOwning) {
+                    if (relation == null) {
+                        cachedEntity[relationPropertyName] = null
+                    } else if (mask != null) {
+                        cachedEntity[relationPropertyName] = this.cache(relation, mask)
+                    } else if (
+                        cachedEntity[relationPropertyName] == null ||
+                        cachedEntity[relationPropertyName].id !== relation.id
+                    ) {
+                        const _relationCacheMap = this.getCacheMap(relation.constructor.name)
+                        const relationConstructor = relation.constructor as any
+                        let cachedRelation = _relationCacheMap.get(relation.id)
+                        if (cachedRelation == null) {
+                            cachedRelation = this.cache(new relationConstructor({id: relation.id}))
+                        }
+                        cachedEntity[relationPropertyName] = cachedRelation
                     }
-                    cached[relationPropertyName] = cachedRelation
+                } else if (mask != null) {
+                    // We also cache these realations, but do not assign them to cached entity,
+                    // since we can not garantee that result will be consistent.
+                    if (relationMetadata.isOneToMany) {
+                        assert(Array.isArray(relation))
+                        for (const r of relation) {
+                            this.cache(r, mask)
+                        }
+                    } else if (relationMetadata.isOneToOne) {
+                        this.cache(relation, mask)
+                    }
                 }
             }
 
-            cachedEntities.push(cached)
+            cachedEntities.push(cachedEntity)
         }
 
         return Array.isArray(e) ? cachedEntities : cachedEntities[0]
