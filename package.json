@@ -1,6 +1,6 @@
 {
-  "name": "@belopash/squid-tools",
-  "version": "0.4.0",
+  "name": "@belopash/typeorm-store",
+  "version": "0.0.0",
   "description": "",
   "main": "lib/index.js",
   "scripts": {
@@ -9,7 +9,6 @@
   },
   "dependencies": {
     "@subsquid/util-internal": "^2.3.0",
-    "copy-anything": "^3.0.5",
     "graph-data-structure": "^3.3.0"
   },
   "peerDependencies": {
