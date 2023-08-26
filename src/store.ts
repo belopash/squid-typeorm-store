@@ -1,21 +1,12 @@
-import {Entity as _Entity, EntityClass, FindManyOptions, FindOneOptions, Store} from '@subsquid/typeorm-store'
+import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions, Store} from '@subsquid/typeorm-store'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {Graph} from 'graph-data-structure'
-import {
-    EntityManager,
-    EntityTarget,
-    FindOptionsRelations,
-    FindOptionsWhere,
-    In,
-    ObjectLiteral,
-    EntityMetadata,
-} from 'typeorm'
+import {EntityManager, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
+import {copy, splitIntoBatches} from './utils'
 
-export interface Entity extends _Entity {
-    [k: string]: any
-}
+export {EntityClass, FindManyOptions, FindOneOptions, Entity}
 
 export class CachedEntity<E extends Entity> {
     value: E | null
@@ -133,24 +124,17 @@ export class CacheMap {
 export type DeferMap = Map<string, {ids: Set<string>; relations: FindOptionsRelations<any>}>
 export type ChangeMap = Map<string, Set<string>>
 
+// @ts-ignore
 export class StoreWithCache extends Store {
-    static create(store: Store) {
-        return new StoreWithCache(store['em'], store['changes'])
-    }
-
-    private get _em(): EntityManager {
-        return this['em']()
-    }
-
     private deferMap: DeferMap = new Map()
-
-    private cache = new CacheMap(this['em'])
-
     private insertMap: ChangeMap = new Map()
     private upsertMap: ChangeMap = new Map()
 
-    private constructor(em: () => EntityManager, changes?: ChangeTracker) {
+    private cache: CacheMap
+
+    private constructor(private em: () => EntityManager, changes?: ChangeTracker) {
         super(em, changes)
+        this.cache = new CacheMap(em)
     }
 
     async insert<E extends _Entity>(entity: E): Promise<void>
@@ -160,7 +144,7 @@ export class StoreWithCache extends Store {
         if (entities.length == 0) return
 
         const entityClass = entities[0].constructor
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
 
         const relationMask: FindOptionsRelations<any> = {}
         for (const relation of metadata.relations) {
@@ -189,7 +173,7 @@ export class StoreWithCache extends Store {
         if (entities.length == 0) return
 
         const EntityTarget = entities[0].constructor
-        const metadata = this._em.connection.getMetadata(EntityTarget)
+        const metadata = this.em().connection.getMetadata(EntityTarget)
         const _insertList = this.getInsertList(EntityTarget.name)
         const _upsertList = this.getUpsertList(EntityTarget.name)
         for (const entity of entities) {
@@ -308,7 +292,7 @@ export class StoreWithCache extends Store {
         let e = await this.get(entityClass, id, relations)
 
         if (e == null) {
-            const metadata = this._em.connection.getMetadata(entityClass)
+            const metadata = this.em().connection.getMetadata(entityClass)
             throw new Error(`Missing entity ${metadata.name} with id "${id}"`)
         }
 
@@ -316,7 +300,7 @@ export class StoreWithCache extends Store {
     }
 
     private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask: FindOptionsRelations<E> = {}) {
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
 
         const cachedEntity = this.cache.get(entityClass, id)
 
@@ -325,17 +309,17 @@ export class StoreWithCache extends Store {
         } else if (cachedEntity.value == null) {
             return null
         } else {
-            const clonedEntity = this._em.create(entityClass)
+            const clonedEntity = this.em().create(entityClass)
 
             for (const column of metadata.nonVirtualColumns) {
-                const objectColumnValue = cachedEntity.value[column.propertyName]
+                const objectColumnValue = column.getEntityValue(cachedEntity.value)
                 if (objectColumnValue !== undefined) {
                     column.setEntityValue(clonedEntity, copy(objectColumnValue))
                 }
             }
 
             for (const relation of metadata.relations) {
-                let relatedMask = mask[relation.propertyName]
+                let relatedMask = mask[relation.propertyName as keyof E]
                 if (!relatedMask) continue
 
                 const relatedEntity = relation.getEntityValue(cachedEntity.value)
@@ -389,10 +373,12 @@ export class StoreWithCache extends Store {
             await super.insert(changes.inserts)
             await super.upsert(changes.delayedUpserts)
         }
+
+        this.clearChanges()
     }
 
     private computeChanges<E extends Entity>(entityClass: EntityTarget<E>) {
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
         const selfRelations = metadata.manyToOneRelations.filter((r) => r.inverseEntityMetadata.name === metadata.name)
 
         const insertList = this.getInsertList(entityClass)
@@ -432,11 +418,16 @@ export class StoreWithCache extends Store {
         }
     }
 
+    private clearChanges() {
+        this.insertMap.clear()
+        this.upsertMap.clear()
+    }
+
     private async load(): Promise<void> {
         for (const [entityName, _deferData] of this.deferMap) {
             if (_deferData.ids.size === 0) return
 
-            const metadata = this._em.connection.getMetadata(entityName)
+            const metadata = this.em().connection.getMetadata(entityName)
 
             for (const id of _deferData.ids) {
                 this.cache.ensure(metadata.target, id)
@@ -453,7 +444,7 @@ export class StoreWithCache extends Store {
     @def
     private async getTopologicalOrder() {
         const graph = Graph()
-        for (const metadata of this._em.connection.entityMetadatas) {
+        for (const metadata of this.em().connection.entityMetadatas) {
             graph.addNode(metadata.name)
             for (const foreignKey of metadata.foreignKeys) {
                 if (foreignKey.referencedEntityMetadata === metadata) continue // don't add self-refs
@@ -466,7 +457,7 @@ export class StoreWithCache extends Store {
     }
 
     private getDeferData(entityClass: EntityTarget<any>) {
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
 
         let list = this.deferMap.get(metadata.name)
         if (list == null) {
@@ -478,7 +469,7 @@ export class StoreWithCache extends Store {
     }
 
     private getInsertList(entityClass: EntityTarget<any>) {
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
 
         let list = this.insertMap.get(metadata.name)
         if (list == null) {
@@ -490,7 +481,7 @@ export class StoreWithCache extends Store {
     }
 
     private getUpsertList(entityClass: EntityTarget<any>) {
-        const metadata = this._em.connection.getMetadata(entityClass)
+        const metadata = this.em().connection.getMetadata(entityClass)
 
         let list = this.upsertMap.get(metadata.name)
         if (list == null) {
@@ -535,58 +526,4 @@ export class DeferredEntity<E extends Entity> {
     async getOrFail(): Promise<E> {
         return await this.opts.getOrFail()
     }
-}
-
-function* splitIntoBatches<T>(list: T[], maxBatchSize: number): Generator<T[]> {
-    if (list.length <= maxBatchSize) {
-        yield list
-    } else {
-        let offset = 0
-        while (list.length - offset > maxBatchSize) {
-            yield list.slice(offset, offset + maxBatchSize)
-            offset += maxBatchSize
-        }
-        yield list.slice(offset)
-    }
-}
-
-function copy<T>(obj: T): T {
-    if (typeof obj !== 'object' || obj == null) return obj
-    else if (obj instanceof Date) {
-        return new Date(obj) as any
-    } else if (Array.isArray(obj)) {
-        return copyArray(obj) as any
-    } else if (obj instanceof Map) {
-        return new Map(copyArray(Array.from(obj))) as any
-    } else if (obj instanceof Set) {
-        return new Set(copyArray(Array.from(obj))) as any
-    } else if (ArrayBuffer.isView(obj)) {
-        return copyBuffer(obj)
-    } else {
-        const clone = Object.create(Object.getPrototypeOf(obj))
-        for (var k in obj) {
-            clone[k] = copy(obj[k])
-        }
-        return clone
-    }
-}
-
-function isObject(val: any): val is Object {
-    return val !== null && typeof val === 'object'
-}
-
-function copyBuffer(buf: any) {
-    if (buf instanceof Buffer) {
-        return Buffer.from(buf)
-    }
-
-    return new buf.constructor(buf.buffer.slice(), buf.byteOffset, buf.length)
-}
-
-function copyArray(arr: any[]) {
-    const clone = new Array(arr.length)
-    for (let i = 0; i < arr.length; i++) {
-        clone[i] = copy(clone[i])
-    }
-    return clone
 }
