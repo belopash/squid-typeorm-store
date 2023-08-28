@@ -113,6 +113,13 @@ export class CacheMap {
         }
     }
 
+    clear() {
+        for (const item of this.map.values()) {
+            item.clear()
+        }
+        this.map.clear()
+    }
+
     private getEntityCache(entityClass: EntityTarget<any>) {
         const em = this.em()
         const metadata = em.connection.getMetadata(entityClass)
