@@ -30,12 +30,12 @@ export class CacheMap {
     }
 
     ensure<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
-        const _cacheMap = this.getEntityCache(entityClass)
+        const cacheMap = this.getEntityCache(entityClass)
 
-        let cachedEntity = _cacheMap.get(id)
+        let cachedEntity = cacheMap.get(id)
         if (cachedEntity == null) {
             cachedEntity = new CachedEntity()
-            _cacheMap.set(id, cachedEntity)
+            cacheMap.set(id, cachedEntity)
         }
     }
 
@@ -49,23 +49,25 @@ export class CacheMap {
     add<E extends Entity>(entity: E, mask?: FindOptionsRelations<any>): void
     add<E extends Entity>(entities: E[], mask?: FindOptionsRelations<any>): void
     add<E extends Entity>(e: E | E[], mask: FindOptionsRelations<any> = {}) {
+        const em = this.em()
+
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
         const entityClass = entities[0].constructor
-        const metadata = this.em().connection.getMetadata(entities[0].constructor)
+        const metadata = em.connection.getMetadata(entities[0].constructor)
 
-        const _cacheMap = this.getEntityCache(metadata.target)
+        const cacheMap = this.getEntityCache(metadata.target)
 
         for (const entity of entities) {
-            let cachedEntity = _cacheMap.get(entity.id)
+            let cachedEntity = cacheMap.get(entity.id)
             if (cachedEntity == null) {
                 cachedEntity = new CachedEntity()
-                _cacheMap.set(entity.id, cachedEntity)
+                cacheMap.set(entity.id, cachedEntity)
             }
 
             if (cachedEntity.value == null) {
-                cachedEntity.value = this.em().create(entityClass)
+                cachedEntity.value = em.create(entityClass)
             }
 
             for (const column of metadata.nonVirtualColumns) {
@@ -103,7 +105,7 @@ export class CacheMap {
                             `missing entity ${relatedMetadata.name} with id ${relatedEntity.id}`
                         )
 
-                        const relatedEntityIdOnly = this.em().create(relatedMetadata.target, {id: relatedEntity.id})
+                        const relatedEntityIdOnly = em.create(relatedMetadata.target, {id: relatedEntity.id})
                         relation.setEntityValue(cachedEntity.value, relatedEntityIdOnly)
                     }
                 }
@@ -112,7 +114,8 @@ export class CacheMap {
     }
 
     private getEntityCache(entityClass: EntityTarget<any>) {
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
 
         let map = this.map.get(metadata.name)
         if (map == null) {

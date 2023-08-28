@@ -33,11 +33,13 @@ export class StoreWithCache extends Store {
     async insert<E extends _Entity>(entity: E): Promise<void>
     async insert<E extends _Entity>(entities: E[]): Promise<void>
     async insert<E extends _Entity>(e: E | E[]): Promise<void> {
-        let entities = Array.isArray(e) ? e : [e]
+        const em = this.em()
+
+        const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
         const entityClass = entities[0].constructor
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const metadata = em.connection.getMetadata(entityClass)
 
         const relationMask: FindOptionsRelations<any> = {}
         for (const relation of metadata.relations) {
@@ -56,11 +58,13 @@ export class StoreWithCache extends Store {
     async upsert<E extends _Entity>(entity: E): Promise<void>
     async upsert<E extends _Entity>(entities: E[]): Promise<void>
     async upsert<E extends _Entity>(e: E | E[]): Promise<void> {
+        const em = this.em()
+
         let entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
         const entityClass = entities[0].constructor
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const metadata = em.connection.getMetadata(entityClass)
 
         const updateMap = this.getUpdateMap(entityClass)
         for (const entity of entities) {
@@ -88,6 +92,8 @@ export class StoreWithCache extends Store {
     async remove<E extends Entity>(entities: E[]): Promise<void>
     async remove<E extends Entity>(entityClass: EntityTarget<E>, id: string | string[]): Promise<void>
     async remove<E extends Entity>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
+        const em = this.em()
+
         if (id == null) {
             const entities = Array.isArray(e) ? e : [e as E]
             if (entities.length == 0) return
@@ -97,6 +103,7 @@ export class StoreWithCache extends Store {
 
             for (const entity of entities) {
                 updateMap.remove(entity.id)
+                this.cache.delete(entityClass, entity.id)
             }
         } else {
             const ids = Array.isArray(id) ? id : [id]
@@ -107,6 +114,7 @@ export class StoreWithCache extends Store {
 
             for (const i of ids) {
                 updateMap.remove(i)
+                this.cache.delete(entityClass, i)
             }
         }
     }
@@ -207,7 +215,8 @@ export class StoreWithCache extends Store {
     }
 
     private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask: FindOptionsRelations<E> = {}) {
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
 
         const cachedEntity = this.cache.get(entityClass, id)
 
@@ -216,7 +225,7 @@ export class StoreWithCache extends Store {
         } else if (cachedEntity.value == null) {
             return null
         } else {
-            const clonedEntity = this.em().create(entityClass)
+            const clonedEntity = em.create(entityClass)
 
             for (const column of metadata.nonVirtualColumns) {
                 const objectColumnValue = column.getEntityValue(cachedEntity.value)
@@ -271,6 +280,8 @@ export class StoreWithCache extends Store {
     }
 
     async flush(): Promise<void> {
+        const em = this.em()
+
         const entityOrder = this.getTopologicalOrder()
         const entityOrderReversed = [...entityOrder].reverse()
 
@@ -313,7 +324,7 @@ export class StoreWithCache extends Store {
                         break
                     }
                     case UpdateType.Remove: {
-                        const e = this.em().create(name, {id})
+                        const e = em.create(name, {id})
                         removes.push(e)
                         break
                     }
@@ -348,17 +359,18 @@ export class StoreWithCache extends Store {
     }
 
     private async load(): Promise<void> {
-        for (const [entityName, _deferData] of this.deferMap) {
-            if (_deferData.ids.size === 0) return
+        const em = this.em()
 
-            const metadata = this.em().connection.getMetadata(entityName)
+        for (const [name, deferData] of this.deferMap) {
+            const metadata = em.connection.getMetadata(name)
 
-            for (const id of _deferData.ids) {
+            for (const id of deferData.ids) {
                 this.cache.ensure(metadata.target, id)
             }
 
-            for (let batch of splitIntoBatches([..._deferData.ids], 30000)) {
-                await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: _deferData.relations})
+            for (let batch of splitIntoBatches([...deferData.ids], 30000)) {
+                if (batch.length == 0) continue
+                await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: deferData.relations})
             }
         }
 
@@ -367,7 +379,8 @@ export class StoreWithCache extends Store {
 
     private knownSelfRelations: Record<string, RelationMetadata[]> = {}
     private getSelfRelations<E extends Entity>(entityClass: EntityTarget<E>) {
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
 
         if (this.knownSelfRelations[metadata.name] == null) {
             this.knownSelfRelations[metadata.name] = metadata.relations.filter(
@@ -379,8 +392,9 @@ export class StoreWithCache extends Store {
 
     @def
     private getTopologicalOrder() {
+        const em = this.em()
         const graph = Graph()
-        for (const metadata of this.em().connection.entityMetadatas) {
+        for (const metadata of em.connection.entityMetadatas) {
             graph.addNode(metadata.name)
             for (const foreignKey of metadata.foreignKeys) {
                 if (foreignKey.referencedEntityMetadata === metadata) continue // don't add self-relations
@@ -393,7 +407,8 @@ export class StoreWithCache extends Store {
     }
 
     private getDeferData(entityClass: EntityTarget<any>) {
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
 
         let list = this.deferMap.get(metadata.name)
         if (list == null) {
@@ -405,7 +420,8 @@ export class StoreWithCache extends Store {
     }
 
     private getUpdateMap(entityClass: EntityTarget<any>) {
-        const metadata = this.em().connection.getMetadata(entityClass)
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
 
         let list = this.updates.get(metadata.name)
         if (list == null) {
