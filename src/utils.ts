@@ -11,23 +11,41 @@ export function* splitIntoBatches<T>(list: T[], maxBatchSize: number): Generator
     }
 }
 
+const copiedObjects = new WeakMap()
+
 export function copy<T>(obj: T): T {
-    if (typeof obj !== 'object' || obj == null) return obj
-    else if (obj instanceof Date) {
+    if (typeof obj !== 'object' || obj == null) {
+        return obj
+    }
+
+    if (copiedObjects.has(obj)) {
+        return copiedObjects.get(obj)
+    } else if (obj instanceof Date) {
         return new Date(obj) as any
     } else if (Array.isArray(obj)) {
-        return copyArray(obj) as any
+        const clone = obj.map((i) => copy(i))
+        copiedObjects.set(obj, clone)
+        return clone as any
     } else if (obj instanceof Map) {
-        return new Map(copyArray(Array.from(obj))) as any
+        const clone = new Map(Array.from(obj).map((i) => copy(i)))
+        copiedObjects.set(obj, clone)
+        return clone as any
     } else if (obj instanceof Set) {
-        return new Set(copyArray(Array.from(obj))) as any
+        const clone = new Set(Array.from(obj).map((i) => copy(i)))
+        copiedObjects.set(obj, clone)
+        return clone as any
     } else if (ArrayBuffer.isView(obj)) {
         return copyBuffer(obj)
     } else {
         const clone = Object.create(Object.getPrototypeOf(obj))
-        for (var k in obj) {
-            clone[k] = copy(obj[k])
+        copiedObjects.set(obj, clone)
+
+        for (const k in obj) {
+            if (obj.hasOwnProperty(k)) {
+                clone[k] = copy(obj[k])
+            }
         }
+
         return clone
     }
 }
@@ -35,15 +53,7 @@ export function copy<T>(obj: T): T {
 function copyBuffer(buf: any) {
     if (buf instanceof Buffer) {
         return Buffer.from(buf)
+    } else {
+        return new buf.constructor(buf.buffer.slice(), buf.byteOffset, buf.length)
     }
-
-    return new buf.constructor(buf.buffer.slice(), buf.byteOffset, buf.length)
-}
-
-function copyArray(arr: any[]) {
-    const clone = new Array(arr.length)
-    for (let i = 0; i < arr.length; i++) {
-        clone[i] = copy(clone[i])
-    }
-    return clone
 }

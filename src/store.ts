@@ -280,63 +280,13 @@ export class StoreWithCache extends Store {
     }
 
     private async persist(): Promise<void> {
-        const em = this.em()
-
         const entityOrder = this.getTopologicalOrder()
         const entityOrderReversed = [...entityOrder].reverse()
-
         const changeSets: Map<string, ChangeSet> = new Map()
+
         for (const name of entityOrder) {
-            const updateMap = this.getUpdateMap(name)
-
-            const inserts: Entity[] = []
-            const upserts: Entity[] = []
-            const delayedUpserts: Entity[] = []
-            const removes: Entity[] = []
-            for (const {id, type} of updateMap) {
-                const cached = this.cache.get(name, id)
-
-                switch (type) {
-                    case UpdateType.Insert: {
-                        assert(cached != null && cached.value != null)
-                        inserts.push(cached.value)
-                        break
-                    }
-                    case UpdateType.Upsert: {
-                        assert(cached != null && cached.value != null)
-
-                        let isDelayed = false
-                        for (const relation of this.getSelfRelations(name)) {
-                            const relatedEntity = relation.getEntityValue(cached.value)
-                            const relatedUpdateType = updateMap.get(relatedEntity.id)
-
-                            if (relatedUpdateType === UpdateType.Insert) {
-                                isDelayed = true
-                                break
-                            }
-                        }
-
-                        if (isDelayed) {
-                            delayedUpserts.push(cached.value)
-                        } else {
-                            upserts.push(cached.value)
-                        }
-                        break
-                    }
-                    case UpdateType.Remove: {
-                        const e = em.create(name, {id})
-                        removes.push(e)
-                        break
-                    }
-                }
-            }
-
-            changeSets.set(name, {
-                inserts,
-                upserts,
-                delayedUpserts,
-                removes,
-            })
+            const changeSet = this.collectChangeSets(name)
+            changeSets.set(name, changeSet)
         }
 
         for (const name of entityOrder) {
@@ -356,6 +306,57 @@ export class StoreWithCache extends Store {
         }
 
         this.updates.clear()
+    }
+
+    private collectChangeSets(entityClass: EntityTarget<Entity>): ChangeSet {
+        const em = this.em()
+
+        const inserts: Entity[] = []
+        const upserts: Entity[] = []
+        const delayedUpserts: Entity[] = []
+        const removes: Entity[] = []
+
+        const updateMap = this.getUpdateMap(entityClass)
+        for (const {id, type} of updateMap) {
+            const cached = this.cache.get(entityClass, id)
+
+            switch (type) {
+                case UpdateType.Insert: {
+                    assert(cached?.value != null)
+                    inserts.push(cached.value)
+                    break
+                }
+                case UpdateType.Upsert: {
+                    assert(cached?.value != null)
+
+                    let isDelayed = false
+                    for (const relation of this.getSelfRelations(entityClass)) {
+                        const relatedEntity = relation.getEntityValue(cached.value)
+                        if (relatedEntity == null) continue
+
+                        const relatedUpdateType = updateMap.get(relatedEntity.id)
+                        if (relatedUpdateType === UpdateType.Insert) {
+                            isDelayed = true
+                            break
+                        }
+                    }
+
+                    if (isDelayed) {
+                        delayedUpserts.push(cached.value)
+                    } else {
+                        upserts.push(cached.value)
+                    }
+                    break
+                }
+                case UpdateType.Remove: {
+                    const e = em.create(entityClass, {id})
+                    removes.push(e)
+                    break
+                }
+            }
+        }
+
+        return {inserts, upserts, delayedUpserts, removes}
     }
 
     async flush(): Promise<void> {

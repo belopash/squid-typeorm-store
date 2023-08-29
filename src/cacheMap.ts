@@ -1,15 +1,14 @@
 import {Entity} from '@subsquid/typeorm-store'
-import assert from 'assert'
 import {EntityManager, EntityTarget, FindOptionsRelations} from 'typeorm'
+import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
+import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {copy} from './utils'
 
 export class CachedEntity<E extends Entity> {
     value: E | null
-    relations: {[key: string]: boolean}
 
     constructor() {
         this.value = null
-        this.relations = {}
     }
 }
 
@@ -32,85 +31,14 @@ export class CacheMap {
     ensure<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
         const cacheMap = this.getEntityCache(entityClass)
 
-        let cachedEntity = cacheMap.get(id)
-        if (cachedEntity == null) {
-            cachedEntity = new CachedEntity()
-            cacheMap.set(id, cachedEntity)
+        if (!cacheMap.has(id)) {
+            cacheMap.set(id, new CachedEntity())
         }
     }
 
     delete<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
         const cacheMap = this.getEntityCache(entityClass)
-
-        const cachedEntity = new CachedEntity()
-        cacheMap.set(id, cachedEntity)
-    }
-
-    add<E extends Entity>(entity: E, mask?: FindOptionsRelations<any>): void
-    add<E extends Entity>(entities: E[], mask?: FindOptionsRelations<any>): void
-    add<E extends Entity>(e: E | E[], mask: FindOptionsRelations<any> = {}) {
-        const em = this.em()
-
-        const entities = Array.isArray(e) ? e : [e]
-        if (entities.length == 0) return
-
-        const entityClass = entities[0].constructor
-        const metadata = em.connection.getMetadata(entities[0].constructor)
-
-        const cacheMap = this.getEntityCache(metadata.target)
-
-        for (const entity of entities) {
-            let cachedEntity = cacheMap.get(entity.id)
-            if (cachedEntity == null) {
-                cachedEntity = new CachedEntity()
-                cacheMap.set(entity.id, cachedEntity)
-            }
-
-            if (cachedEntity.value == null) {
-                cachedEntity.value = em.create(entityClass)
-            }
-
-            for (const column of metadata.nonVirtualColumns) {
-                const objectColumnValue = column.getEntityValue(entity)
-                if (objectColumnValue !== undefined) {
-                    column.setEntityValue(cachedEntity.value, copy(objectColumnValue))
-                }
-            }
-
-            for (const relation of metadata.relations) {
-                const relatedMetadata = relation.inverseEntityMetadata
-                const relatedEntity = relation.getEntityValue(entity) as Entity | null | undefined
-
-                const relatedMask = mask[relation.propertyName]
-                if (relatedMask) {
-                    if (relation.isOneToMany || relation.isManyToMany) {
-                        if (Array.isArray(relatedEntity)) {
-                            for (const r of relatedEntity) {
-                                this.add(r, typeof relatedMask === 'boolean' ? {} : relatedMask)
-                            }
-                        }
-                    } else if (relatedEntity != null) {
-                        this.add(relatedEntity, typeof relatedMask === 'boolean' ? {} : relatedMask)
-                    }
-                }
-
-                if (relation.isOwning && relatedMask) {
-                    if (relatedEntity == null) {
-                        relation.setEntityValue(cachedEntity.value, null)
-                    } else {
-                        const _relationCacheMap = this.getEntityCache(relatedMetadata.target)
-                        const cachedRelation = _relationCacheMap.get(relatedEntity.id)
-                        assert(
-                            cachedRelation != null,
-                            `missing entity ${relatedMetadata.name} with id ${relatedEntity.id}`
-                        )
-
-                        const relatedEntityIdOnly = em.create(relatedMetadata.target, {id: relatedEntity.id})
-                        relation.setEntityValue(cachedEntity.value, relatedEntityIdOnly)
-                    }
-                }
-            }
-        }
+        cacheMap.set(id, new CachedEntity())
     }
 
     clear() {
@@ -118,6 +46,90 @@ export class CacheMap {
             item.clear()
         }
         this.map.clear()
+    }
+
+    add<E extends Entity>(entity: E, mask?: FindOptionsRelations<E>): void
+    add<E extends Entity>(entities: E[], mask?: FindOptionsRelations<E>): void
+    add<E extends Entity>(e: E | E[], mask: FindOptionsRelations<E> = {}) {
+        const entities = Array.isArray(e) ? e : [e]
+        if (entities.length === 0) return
+
+        for (const entity of entities) {
+            this.cacheEntity(entity, mask)
+        }
+    }
+
+    private cacheEntity(entity: Entity, mask: FindOptionsRelations<any>) {
+        const em = this.em()
+
+        const entityClass = entity.constructor
+        const metadata = em.connection.getMetadata(entityClass)
+        const cacheMap = this.getEntityCache(entityClass)
+
+        const entityId = entity.id
+        let cachedEntity = cacheMap.get(entityId)
+
+        if (cachedEntity == null) {
+            cachedEntity = new CachedEntity()
+            cacheMap.set(entityId, cachedEntity)
+        }
+
+        if (cachedEntity.value == null) {
+            cachedEntity.value = em.create(metadata.target)
+        }
+
+        this.cacheColumns(metadata.columns, entity, cachedEntity.value)
+        this.cacheRelatedEntities(metadata.relations, entity, cachedEntity.value, mask)
+    }
+
+    private cacheColumns(columns: ColumnMetadata[], sourceEntity: Entity, cachedEntity: Entity) {
+        for (const column of columns) {
+            const objectColumnValue = column.getEntityValue(sourceEntity)
+            if (objectColumnValue !== undefined) {
+                column.setEntityValue(cachedEntity, copy(objectColumnValue))
+            }
+        }
+    }
+
+    private cacheRelatedEntities(
+        relations: RelationMetadata[],
+        sourceEntity: Entity,
+        cachedEntity: Entity,
+        mask: FindOptionsRelations<any>
+    ) {
+        for (const relation of relations) {
+            const relatedMetadata = relation.inverseEntityMetadata
+            const relatedEntity = relation.getEntityValue(sourceEntity)
+            const relatedMask = mask[relation.propertyName]
+            if (relatedEntity === undefined) continue
+
+            if (relatedMask) {
+                if (relation.isOneToMany || relation.isManyToMany) {
+                    if (!Array.isArray(relatedEntity)) continue
+
+                    for (const entity of relatedEntity) {
+                        this.cacheEntity(entity, typeof relatedMask === 'boolean' ? {} : relatedMask)
+                    }
+                } else if (relatedEntity != null) {
+                    this.cacheEntity(relatedEntity, typeof relatedMask === 'boolean' ? {} : relatedMask)
+                }
+            }
+
+            if (relation.isOwning) {
+                if (relatedEntity === null) {
+                    relation.setEntityValue(cachedEntity, null)
+                } else {
+                    const relationCacheMap = this.getEntityCache(relatedMetadata.target)
+                    const cachedRelation = relationCacheMap.get(relatedEntity.id)
+
+                    if (cachedRelation == null) {
+                        throw new Error(`Missing entity ${relatedMetadata.name} with id ${relatedEntity.id}`)
+                    }
+
+                    relation.setEntityValue(cachedEntity, cachedRelation.value)
+                }
+            }
+        }
     }
 
     private getEntityCache(entityClass: EntityTarget<any>) {
