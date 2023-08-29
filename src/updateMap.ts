@@ -18,44 +18,22 @@ export class UpdateMap {
 
     insert(id: string) {
         const prevType = this.map.get(id)
-
-        switch (prevType) {
-            case UpdateType.Insert:
-            case UpdateType.Upsert:
-                throw new Error(`Can not add id ${id} because it is already marked as insert or upsert`)
-            case UpdateType.Remove:
-                this.map.set(id, UpdateType.Upsert)
-                break
-            case undefined:
-                this.map.set(id, UpdateType.Insert)
-                break
+        if (prevType === UpdateType.Insert || prevType === UpdateType.Upsert) {
+            throw new Error(`ID ${id} is already marked as insert or upsert`)
         }
+        this.map.set(id, UpdateType.Insert)
     }
 
     upsert(id: string) {
-        const prevType = this.map.get(id)
-
-        switch (prevType) {
-            case UpdateType.Insert:
-                break
-            case UpdateType.Upsert:
-            case UpdateType.Remove:
-            case undefined:
-                this.map.set(id, UpdateType.Upsert)
-                break
-        }
+        this.map.set(id, UpdateType.Upsert)
     }
 
     remove(id: string) {
         const prevType = this.map.get(id)
-
-        switch (prevType) {
-            case UpdateType.Insert:
-            case UpdateType.Upsert:
-            case UpdateType.Remove:
-            case undefined:
-                this.map.set(id, UpdateType.Remove)
-                break
+        if (prevType == UpdateType.Insert) {
+            this.map.delete(id)
+        } else {
+            this.map.set(id, UpdateType.Remove)
         }
     }
 

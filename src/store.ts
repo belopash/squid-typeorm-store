@@ -8,6 +8,8 @@ import {copy, splitIntoBatches} from './utils'
 import {CacheMap} from './cacheMap'
 import {UpdateMap, UpdateType} from './updateMap'
 import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
+import {createLogger, Logger} from '@subsquid/logger'
+import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 
 export {EntityClass, FindManyOptions, FindOneOptions, Entity}
 
@@ -27,7 +29,7 @@ export class StoreWithCache extends Store {
 
     constructor(private em: () => EntityManager, changes?: ChangeTracker) {
         super(em, changes)
-        this.cache = new CacheMap(em)
+        this.cache = new CacheMap(em, {logger: this.getLogger()})
     }
 
     async insert<E extends _Entity>(entity: E): Promise<void>
@@ -280,71 +282,28 @@ export class StoreWithCache extends Store {
     }
 
     private async persist(): Promise<void> {
-        const em = this.em()
+        const log = this.getLogger()
 
         const entityOrder = this.getTopologicalOrder()
         const entityOrderReversed = [...entityOrder].reverse()
-
         const changeSets: Map<string, ChangeSet> = new Map()
+
         for (const name of entityOrder) {
-            const updateMap = this.getUpdateMap(name)
-
-            const inserts: Entity[] = []
-            const upserts: Entity[] = []
-            const delayedUpserts: Entity[] = []
-            const removes: Entity[] = []
-            for (const {id, type} of updateMap) {
-                const cached = this.cache.get(name, id)
-
-                switch (type) {
-                    case UpdateType.Insert: {
-                        assert(cached != null && cached.value != null)
-                        inserts.push(cached.value)
-                        break
-                    }
-                    case UpdateType.Upsert: {
-                        assert(cached != null && cached.value != null)
-
-                        let isDelayed = false
-                        for (const relation of this.getSelfRelations(name)) {
-                            const relatedEntity = relation.getEntityValue(cached.value)
-                            const relatedUpdateType = updateMap.get(relatedEntity.id)
-
-                            if (relatedUpdateType === UpdateType.Insert) {
-                                isDelayed = true
-                                break
-                            }
-                        }
-
-                        if (isDelayed) {
-                            delayedUpserts.push(cached.value)
-                        } else {
-                            upserts.push(cached.value)
-                        }
-                        break
-                    }
-                    case UpdateType.Remove: {
-                        const e = em.create(name, {id})
-                        removes.push(e)
-                        break
-                    }
-                }
-            }
-
-            changeSets.set(name, {
-                inserts,
-                upserts,
-                delayedUpserts,
-                removes,
-            })
+            const changeSet = this.collectChangeSets(name)
+            changeSets.set(name, changeSet)
         }
 
         for (const name of entityOrder) {
             const changeSet = changeSets.get(name)
             if (changeSet == null) continue
 
+            log.debug(`persist upserts for ${name} (${changeSet.upserts.length})`)
             await super.upsert(changeSet.upserts)
+
+            log.debug(`persist inserts for ${name} (${changeSet.inserts.length})`)
             await super.insert(changeSet.inserts)
+
+            log.debug(`persist delayed updates for ${name} (${changeSet.delayedUpserts.length})`)
             await super.upsert(changeSet.delayedUpserts)
         }
 
@@ -352,10 +311,62 @@ export class StoreWithCache extends Store {
             const changeSet = changeSets.get(name)
             if (changeSet == null) continue
 
+            log.debug(`persist removes for ${name} (${changeSet.removes.length})`)
             await super.remove(changeSet.removes)
         }
 
         this.updates.clear()
+    }
+
+    private collectChangeSets(entityClass: EntityTarget<Entity>): ChangeSet {
+        const em = this.em()
+
+        const inserts: Entity[] = []
+        const upserts: Entity[] = []
+        const delayedUpserts: Entity[] = []
+        const removes: Entity[] = []
+
+        const updateMap = this.getUpdateMap(entityClass)
+        for (const {id, type} of updateMap) {
+            const cached = this.cache.get(entityClass, id)
+
+            switch (type) {
+                case UpdateType.Insert: {
+                    assert(cached?.value != null)
+                    inserts.push(cached.value)
+                    break
+                }
+                case UpdateType.Upsert: {
+                    assert(cached?.value != null)
+
+                    let isDelayed = false
+                    for (const relation of this.getSelfRelations(entityClass)) {
+                        const relatedEntity = relation.getEntityValue(cached.value)
+                        if (relatedEntity == null) continue
+
+                        const relatedUpdateType = updateMap.get(relatedEntity.id)
+                        if (relatedUpdateType === UpdateType.Insert) {
+                            isDelayed = true
+                            break
+                        }
+                    }
+
+                    if (isDelayed) {
+                        delayedUpserts.push(cached.value)
+                    } else {
+                        upserts.push(cached.value)
+                    }
+                    break
+                }
+                case UpdateType.Remove: {
+                    const e = em.create(entityClass, {id})
+                    removes.push(e)
+                    break
+                }
+            }
+        }
+
+        return {inserts, upserts, delayedUpserts, removes}
     }
 
     async flush(): Promise<void> {
@@ -435,6 +446,47 @@ export class StoreWithCache extends Store {
         }
 
         return list
+    }
+
+    @def
+    private getLogger(): Logger {
+        return createLogger('sqd:store')
+    }
+
+    // @ts-ignore
+    private async saveMany(entityClass: EntityClass<any>, entities: any[]): Promise<void> {
+        assert(entities.length > 0)
+        let em = this.em()
+        let metadata = em.connection.getMetadata(entityClass)
+        let fk = metadata.columns.filter((c) => c.relationMetadata)
+        if (fk.length == 0) {
+            return this.upsertMany(em, entityClass, entities)
+        }
+        let signatures = entities
+            .map((e) => ({entity: e, value: this.getFkSignature(fk, e)}))
+            .sort((a, b) => (a.value > b.value ? -1 : b.value > a.value ? 1 : 0))
+        let currentSignature = signatures[0].value
+        let batch = []
+        for (let s of signatures) {
+            if (s.value === currentSignature) {
+                batch.push(s.entity)
+            } else {
+                await this.upsertMany(em, entityClass, batch)
+                currentSignature = s.value
+                batch = [s.entity]
+            }
+        }
+        if (batch.length) {
+            await this.upsertMany(em, entityClass, batch)
+        }
+    }
+
+    private getFkSignature(fk: ColumnMetadata[], entity: any): bigint {
+        return super['getFkSignature'](fk, entity)
+    }
+
+    private async upsertMany(em: EntityManager, entityClass: EntityClass<any>, entities: any[]): Promise<void> {
+        return super['upsertMany'](em, entityClass, entities)
     }
 }
 
