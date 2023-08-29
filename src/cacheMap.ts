@@ -3,6 +3,8 @@ import {EntityManager, EntityTarget, FindOptionsRelations} from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {copy} from './utils'
+import {Logger} from '@subsquid/logger'
+import {def} from '@subsquid/util-internal'
 
 export class CachedEntity<E extends Entity> {
     value: E | null
@@ -15,7 +17,7 @@ export class CachedEntity<E extends Entity> {
 export class CacheMap {
     private map: Map<string, Map<string, CachedEntity<any>>> = new Map()
 
-    constructor(private em: () => EntityManager) {}
+    constructor(private em: () => EntityManager, private opts: {logger: Logger}) {}
 
     exist<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
         const cacheMap = this.getEntityCache(entityClass)
@@ -33,16 +35,25 @@ export class CacheMap {
 
         if (!cacheMap.has(id)) {
             cacheMap.set(id, new CachedEntity())
+
+            const name = this.getEntityName(entityClass)
+            this.getLogger().debug(`added empty entity ${name} ${id}`)
         }
     }
 
     delete<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
         const cacheMap = this.getEntityCache(entityClass)
         cacheMap.set(id, new CachedEntity())
+
+        const name = this.getEntityName(entityClass)
+        this.getLogger().debug(`deleted entity ${name} ${id}`)
     }
 
     clear() {
-        for (const item of this.map.values()) {
+        const log = this.getLogger()
+
+        for (const [name, item] of this.map) {
+            log.debug(`cleared cache for ${name} (${item.size})`)
             item.clear()
         }
         this.map.clear()
@@ -76,6 +87,7 @@ export class CacheMap {
 
         if (cachedEntity.value == null) {
             cachedEntity.value = em.create(metadata.target)
+            this.getLogger().debug(`added entity ${metadata.name} ${entity.id}`)
         }
 
         this.cacheColumns(metadata.columns, entity, cachedEntity.value)
@@ -133,15 +145,25 @@ export class CacheMap {
     }
 
     private getEntityCache(entityClass: EntityTarget<any>) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entityClass)
+        const name = this.getEntityName(entityClass)
 
-        let map = this.map.get(metadata.name)
+        let map = this.map.get(name)
         if (map == null) {
             map = new Map()
-            this.map.set(metadata.name, map)
+            this.map.set(name, map)
         }
 
         return map
+    }
+
+    private getEntityName(entityClass: EntityTarget<any>) {
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entityClass)
+        return metadata.name
+    }
+
+    @def
+    private getLogger(): Logger {
+        return this.opts.logger.child('cache')
     }
 }
