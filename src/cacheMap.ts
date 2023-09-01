@@ -90,7 +90,7 @@ export class CacheMap {
             this.getLogger().debug(`added entity ${metadata.name} ${entity.id}`)
         }
 
-        this.cacheColumns(metadata.columns, entity, cachedEntity.value)
+        this.cacheColumns(metadata.nonVirtualColumns, entity, cachedEntity.value)
         this.cacheRelatedEntities(metadata.relations, entity, cachedEntity.value, mask)
     }
 
