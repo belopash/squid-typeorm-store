@@ -43,17 +43,10 @@ export class StoreWithCache extends Store {
         const entityClass = entities[0].constructor
         const metadata = em.connection.getMetadata(entityClass)
 
-        const relationMask: FindOptionsRelations<any> = {}
-        for (const relation of metadata.relations) {
-            if (relation.isOwning) {
-                relationMask[relation.propertyName] = true
-            }
-        }
-
         const updateMap = this.getUpdateMap(entityClass)
         for (const entity of entities) {
             updateMap.insert(entity.id)
-            this.cache.add(entity, relationMask)
+            this.cache.add(entity)
         }
     }
 
@@ -70,17 +63,8 @@ export class StoreWithCache extends Store {
 
         const updateMap = this.getUpdateMap(entityClass)
         for (const entity of entities) {
-            const relationMask: FindOptionsRelations<any> = {}
-            for (const relation of metadata.relations) {
-                const relatedEntity = relation.getEntityValue(entity) as Entity | null | undefined
-
-                if (relation.isOwning && relatedEntity !== undefined) {
-                    relationMask[relation.propertyName] = true
-                }
-            }
-
             updateMap.upsert(entity.id)
-            this.cache.add(entity, relationMask)
+            this.cache.add(entity)
         }
     }
 
