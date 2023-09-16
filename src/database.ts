@@ -33,6 +33,7 @@ export class TypeormDatabaseWithCache extends TypeormDatabase {
 
         try {
             await cb(store)
+            await store.flush()
         } finally {
             running = false
         }
