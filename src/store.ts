@@ -106,7 +106,7 @@ export class StoreWithCache extends Store {
     }
 
     async count<E extends Entity>(entityClass: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
-        await this.persist()
+        await this.commit()
         return await super.count(entityClass as EntityClass<E>, options)
     }
 
@@ -114,12 +114,12 @@ export class StoreWithCache extends Store {
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<number> {
-        await this.persist()
+        await this.commit()
         return await super.countBy(entityClass as EntityClass<E>, where)
     }
 
     async find<E extends Entity>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
-        await this.persist()
+        await this.commit()
         const res = await super.find(entityClass as EntityClass<E>, options)
         if (res != null) this.cache.add(res, options.relations)
         return res
@@ -129,21 +129,21 @@ export class StoreWithCache extends Store {
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E[]> {
-        await this.persist()
+        await this.commit()
         const res = await super.findBy(entityClass as EntityClass<E>, where)
         if (res != null) this.cache.add(res)
         return res
     }
 
     async findOne<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E | undefined> {
-        await this.persist()
+        await this.commit()
         const res = await super.findOne(entityClass as EntityClass<E>, options)
         if (res != null) this.cache.add(res, options.relations)
         return res
     }
 
     async findOneOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
-        await this.persist()
+        await this.commit()
         const res = await super.findOneOrFail(entityClass as EntityClass<E>, options)
         if (res != null) this.cache.add(res, options.relations)
         return res
@@ -153,7 +153,7 @@ export class StoreWithCache extends Store {
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E | undefined> {
-        await this.persist()
+        await this.commit()
         const res = await super.findOneBy(entityClass as EntityClass<E>, where)
         if (res != null) this.cache.add(res)
         return res
@@ -163,7 +163,7 @@ export class StoreWithCache extends Store {
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E> {
-        await this.persist()
+        await this.commit()
         const res = await super.findOneByOrFail(entityClass as EntityClass<E>, where)
         if (res != null) this.cache.add(res)
         return res
@@ -265,7 +265,7 @@ export class StoreWithCache extends Store {
         })
     }
 
-    private async persist(): Promise<void> {
+    async commit(): Promise<void> {
         const log = this.getLogger()
 
         const entityOrder = this.getTopologicalOrder()
@@ -281,13 +281,13 @@ export class StoreWithCache extends Store {
             const changeSet = changeSets.get(name)
             if (changeSet == null) continue
 
-            log.debug(`persist upserts for ${name} (${changeSet.upserts.length})`)
+            log.debug(`commit upserts for ${name} (${changeSet.upserts.length})`)
             await super.upsert(changeSet.upserts)
 
-            log.debug(`persist inserts for ${name} (${changeSet.inserts.length})`)
+            log.debug(`commit inserts for ${name} (${changeSet.inserts.length})`)
             await super.insert(changeSet.inserts)
 
-            log.debug(`persist delayed updates for ${name} (${changeSet.delayedUpserts.length})`)
+            log.debug(`commit delayed updates for ${name} (${changeSet.delayedUpserts.length})`)
             await super.upsert(changeSet.delayedUpserts)
         }
 
@@ -295,7 +295,7 @@ export class StoreWithCache extends Store {
             const changeSet = changeSets.get(name)
             if (changeSet == null) continue
 
-            log.debug(`persist removes for ${name} (${changeSet.removes.length})`)
+            log.debug(`commit removes for ${name} (${changeSet.removes.length})`)
             await super.remove(changeSet.removes)
         }
 
@@ -354,7 +354,7 @@ export class StoreWithCache extends Store {
     }
 
     async flush(): Promise<void> {
-        await this.persist()
+        await this.commit()
         this.cache.clear()
     }
 
