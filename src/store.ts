@@ -2,14 +2,14 @@ import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions,
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {def} from '@subsquid/util-internal'
 import assert from 'assert'
-import {Graph} from 'graph-data-structure'
-import {EntityManager, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
+import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
 import {copy, splitIntoBatches} from './utils'
 import {CacheMap} from './cacheMap'
 import {UpdateMap, UpdateType} from './updateMap'
 import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {createLogger, Logger} from '@subsquid/logger'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
+import {RelationGraph} from './relationGraph'
 
 export {EntityClass, FindManyOptions, FindOneOptions, Entity}
 
@@ -268,34 +268,34 @@ export class StoreWithCache extends Store {
     async commit(): Promise<void> {
         const log = this.getLogger()
 
-        const entityOrder = this.getTopologicalOrder()
+        const entityOrder = this.getCommitOrder()
         const entityOrderReversed = [...entityOrder].reverse()
-        const changeSets: Map<string, ChangeSet> = new Map()
 
-        for (const name of entityOrder) {
-            const changeSet = this.collectChangeSets(name)
-            changeSets.set(name, changeSet)
+        const changeSets: Map<EntityMetadata, ChangeSet> = new Map()
+        for (const metadata of entityOrder) {
+            const changeSet = this.collectChangeSets(metadata.target)
+            changeSets.set(metadata, changeSet)
         }
 
-        for (const name of entityOrder) {
-            const changeSet = changeSets.get(name)
+        for (const metadata of entityOrder) {
+            const changeSet = changeSets.get(metadata)
             if (changeSet == null) continue
 
-            log.debug(`commit upserts for ${name} (${changeSet.upserts.length})`)
+            log.debug(`commit upserts for ${metadata.name} (${changeSet.upserts.length})`)
             await super.upsert(changeSet.upserts)
 
-            log.debug(`commit inserts for ${name} (${changeSet.inserts.length})`)
+            log.debug(`commit inserts for ${metadata.name} (${changeSet.inserts.length})`)
             await super.insert(changeSet.inserts)
 
-            log.debug(`commit delayed updates for ${name} (${changeSet.delayedUpserts.length})`)
+            log.debug(`commit delayed updates for ${metadata.name} (${changeSet.delayedUpserts.length})`)
             await super.upsert(changeSet.delayedUpserts)
         }
 
-        for (const name of entityOrderReversed) {
-            const changeSet = changeSets.get(name)
+        for (const metadata of entityOrderReversed) {
+            const changeSet = changeSets.get(metadata)
             if (changeSet == null) continue
 
-            log.debug(`commit removes for ${name} (${changeSet.removes.length})`)
+            log.debug(`commit removes for ${metadata.name} (${changeSet.removes.length})`)
             await super.remove(changeSet.removes)
         }
 
@@ -391,19 +391,17 @@ export class StoreWithCache extends Store {
     }
 
     @def
-    private getTopologicalOrder() {
+    private getCommitOrder() {
         const em = this.em()
-        const graph = Graph()
-        for (const metadata of em.connection.entityMetadatas) {
-            graph.addNode(metadata.name)
-            for (const foreignKey of metadata.foreignKeys) {
-                if (foreignKey.referencedEntityMetadata === metadata) continue // don't add self-relations
+        return this.buildRelationGraph().getCommitOrder(em.connection.entityMetadatas)
+    }
 
-                graph.addEdge(metadata.name, foreignKey.referencedEntityMetadata.name)
-            }
-        }
+    @def
+    private buildRelationGraph() {
+        const em = this.em()
+        const graph = new RelationGraph()
 
-        return graph.topologicalSort().reverse()
+        return graph
     }
 
     private getDeferData(entityClass: EntityTarget<any>) {
