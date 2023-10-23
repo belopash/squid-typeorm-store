@@ -61,8 +61,6 @@ export function getCommitOrder(entities: EntityMetadata[]): EntityMetadata[] {
         visit(node)
     }
 
-    console.log(saveOrder.map((m) => m.name))
-
     return saveOrder
 }
 

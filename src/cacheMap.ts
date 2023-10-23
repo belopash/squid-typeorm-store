@@ -110,32 +110,32 @@ export class CacheMap {
         mask: FindOptionsRelations<any>
     ) {
         for (const relation of relations) {
-            const relatedMetadata = relation.inverseEntityMetadata
-            const relatedEntity = relation.getEntityValue(sourceEntity)
-            const relatedMask = mask[relation.propertyName]
-            if (relatedEntity === undefined) continue
+            const invMetadata = relation.inverseEntityMetadata
+            const invEntity = relation.getEntityValue(sourceEntity)
+            const invMask = mask[relation.propertyName]
+            if (invEntity === undefined) continue
 
-            if (relatedMask) {
+            if (invMask) {
                 if (relation.isOneToMany || relation.isManyToMany) {
-                    if (!Array.isArray(relatedEntity)) continue
+                    if (!Array.isArray(invEntity)) continue
 
-                    for (const entity of relatedEntity) {
-                        this.cacheEntity(entity, typeof relatedMask === 'boolean' ? {} : relatedMask)
+                    for (const entity of invEntity) {
+                        this.cacheEntity(entity, typeof invMask === 'boolean' ? {} : invMask)
                     }
-                } else if (relatedEntity != null) {
-                    this.cacheEntity(relatedEntity, typeof relatedMask === 'boolean' ? {} : relatedMask)
+                } else if (invEntity != null) {
+                    this.cacheEntity(invEntity, typeof invMask === 'boolean' ? {} : invMask)
                 }
             }
 
             if (relation.isOwning) {
-                if (relatedEntity === null) {
+                if (invEntity === null) {
                     relation.setEntityValue(cachedEntity, null)
                 } else {
-                    const relationCacheMap = this.getEntityCache(relatedMetadata.target)
-                    const cachedRelation = relationCacheMap.get(relatedEntity.id)
+                    const relationCacheMap = this.getEntityCache(invMetadata.target)
+                    const cachedRelation = relationCacheMap.get(invEntity.id)
 
                     if (cachedRelation == null) {
-                        throw new Error(`Missing entity ${relatedMetadata.name} with id ${relatedEntity.id}`)
+                        throw new Error(`Missing entity ${invMetadata.name} with id ${invEntity.id}`)
                     }
 
                     relation.setEntityValue(cachedEntity, cachedRelation.value)

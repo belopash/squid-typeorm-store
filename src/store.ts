@@ -1,51 +1,50 @@
+import {createLogger, Logger} from '@subsquid/logger'
 import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions, Store} from '@subsquid/typeorm-store'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
-import {copy, splitIntoBatches} from './utils'
-import {CacheMap} from './cacheMap'
-import {UpdateMap, UpdateType} from './updateMap'
-import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
-import {createLogger, Logger} from '@subsquid/logger'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
+import {CachedEntity, CacheMap} from './cacheMap'
+import {UpdatesTracker, UpdateType} from './changeTracker'
+import {DeferQueue} from './deferQueue'
 import {getCommitOrder} from './relationGraph'
+import {copy, splitIntoBatches} from './utils'
 
-export {EntityClass, FindManyOptions, FindOneOptions, Entity}
+export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
-export type DeferMap = Map<string, {ids: Set<string>; relations: FindOptionsRelations<any>}>
-export interface ChangeSet {
-    inserts: Entity[]
-    upserts: Entity[]
-    delayedUpserts: Entity[]
-    removes: Entity[]
+export type ChangeSet<E extends Entity> = {
+    metadata: EntityMetadata
+    inserts: E[]
+    upserts: E[]
+    removes: E[]
+    extraUpserts: E[]
 }
 
 // @ts-ignore
 export class StoreWithCache extends Store {
-    private deferMap: DeferMap = new Map()
-    private updates: Map<string, UpdateMap> = new Map()
+    private updates: UpdatesTracker
+    private queue: DeferQueue
     private cache: CacheMap
+    private logger: Logger
 
     constructor(private em: () => EntityManager, changes?: ChangeTracker) {
         super(em, changes)
-        this.cache = new CacheMap(em, {logger: this.getLogger()})
+        this.logger = createLogger('sqd:store')
+        this.cache = new CacheMap(em, {logger: this.logger})
+        this.updates = new UpdatesTracker(em)
+        this.queue = new DeferQueue(em)
     }
 
     async insert<E extends _Entity>(entity: E): Promise<void>
     async insert<E extends _Entity>(entities: E[]): Promise<void>
     async insert<E extends _Entity>(e: E | E[]): Promise<void> {
-        const em = this.em()
-
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
-        const entityClass = entities[0].constructor
-        const metadata = em.connection.getMetadata(entityClass)
-
-        const updateMap = this.getUpdateMap(entityClass)
+        const entityClass = entities[0].constructor as EntityTarget<E>
         for (const entity of entities) {
-            updateMap.insert(entity.id)
+            this.updates.insert(entityClass, entity.id)
             this.cache.add(entity)
         }
     }
@@ -53,17 +52,12 @@ export class StoreWithCache extends Store {
     async upsert<E extends _Entity>(entity: E): Promise<void>
     async upsert<E extends _Entity>(entities: E[]): Promise<void>
     async upsert<E extends _Entity>(e: E | E[]): Promise<void> {
-        const em = this.em()
-
         let entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
-        const entityClass = entities[0].constructor
-        const metadata = em.connection.getMetadata(entityClass)
-
-        const updateMap = this.getUpdateMap(entityClass)
+        const entityClass = entities[0].constructor as EntityTarget<E>
         for (const entity of entities) {
-            updateMap.upsert(entity.id)
+            this.updates.upsert(entityClass, entity.id)
             this.cache.add(entity)
         }
     }
@@ -78,17 +72,13 @@ export class StoreWithCache extends Store {
     async remove<E extends Entity>(entities: E[]): Promise<void>
     async remove<E extends Entity>(entityClass: EntityTarget<E>, id: string | string[]): Promise<void>
     async remove<E extends Entity>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
-        const em = this.em()
-
         if (id == null) {
             const entities = Array.isArray(e) ? e : [e as E]
             if (entities.length == 0) return
 
-            const entityClass = entities[0].constructor
-            const updateMap = this.getUpdateMap(entityClass)
-
+            const entityClass = entities[0].constructor as EntityTarget<E>
             for (const entity of entities) {
-                updateMap.remove(entity.id)
+                this.updates.remove(entityClass, entity.id)
                 this.cache.delete(entityClass, entity.id)
             }
         } else {
@@ -96,11 +86,9 @@ export class StoreWithCache extends Store {
             if (ids.length == 0) return
 
             const entityClass = e as EntityTarget<E>
-            const updateMap = this.getUpdateMap(entityClass)
-
-            for (const i of ids) {
-                updateMap.remove(i)
-                this.cache.delete(entityClass, i)
+            for (const id of ids) {
+                this.updates.remove(entityClass, id)
+                this.cache.delete(entityClass, id)
             }
         }
     }
@@ -221,20 +209,20 @@ export class StoreWithCache extends Store {
             }
 
             for (const relation of metadata.relations) {
-                let relatedMask = mask[relation.propertyName as keyof E]
-                if (!relatedMask) continue
+                let invMask = mask[relation.propertyName as keyof E]
+                if (!invMask) continue
 
-                const relatedEntity = relation.getEntityValue(cachedEntity.value)
+                const invEntity = relation.getEntityValue(cachedEntity.value)
 
-                if (relatedEntity === undefined) {
+                if (invEntity === undefined) {
                     return undefined // relation is missing, but required
-                } else if (relatedEntity == null) {
+                } else if (invEntity == null) {
                     relation.setEntityValue(clonedEntity, null)
                 } else {
                     const cachedRelatedEntity = this.getCached(
                         relation.inverseEntityMetadata.target,
-                        relatedEntity.id,
-                        typeof relatedMask === 'boolean' ? {} : relatedMask
+                        invEntity.id,
+                        typeof invMask === 'boolean' ? {} : invMask
                     )
                     assert(cachedRelatedEntity != null)
 
@@ -251,13 +239,7 @@ export class StoreWithCache extends Store {
         id: string,
         relations?: FindOptionsRelations<E>
     ): DeferredEntity<E> {
-        const _deferredList = this.getDeferData(entityClass)
-
-        _deferredList.ids.add(id)
-
-        if (relations != null) {
-            _deferredList.relations = mergeRelataions(_deferredList.relations, relations)
-        }
+        this.queue.add(entityClass, id, relations)
 
         return new DeferredEntity({
             get: async () => this.get(entityClass, id, relations),
@@ -266,91 +248,118 @@ export class StoreWithCache extends Store {
     }
 
     async commit(): Promise<void> {
-        const log = this.getLogger()
+        const log = this.logger.child('commit')
 
         const entityOrder = this.getCommitOrder()
-        const entityOrderReversed = [...entityOrder].reverse()
 
-        const changeSets: Map<EntityMetadata, ChangeSet> = new Map()
+        const changeSets: ChangeSet<any>[] = []
         for (const metadata of entityOrder) {
-            const changeSet = this.collectChangeSets(metadata.target)
-            changeSets.set(metadata, changeSet)
+            const changeSet = this.getChangeSet(metadata.target)
+            changeSets.push(changeSet)
         }
 
-        for (const metadata of entityOrder) {
-            const changeSet = changeSets.get(metadata)
-            if (changeSet == null) continue
+        for (const {metadata, inserts, upserts} of changeSets) {
+            log.debug(`commit upserts for ${metadata.name} (${upserts.length})`)
+            await super.upsert(upserts)
 
-            log.debug(`commit upserts for ${metadata.name} (${changeSet.upserts.length})`)
-            await super.upsert(changeSet.upserts)
-
-            log.debug(`commit inserts for ${metadata.name} (${changeSet.inserts.length})`)
-            await super.insert(changeSet.inserts)
-
-            log.debug(`commit delayed updates for ${metadata.name} (${changeSet.delayedUpserts.length})`)
-            await super.upsert(changeSet.delayedUpserts)
+            log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
+            await super.insert(inserts)
         }
 
-        for (const metadata of entityOrderReversed) {
-            const changeSet = changeSets.get(metadata)
-            if (changeSet == null) continue
+        const changeSetsReversed = [...changeSets].reverse()
+        for (const {metadata, removes} of changeSetsReversed) {
+            log.debug(`commit removes for ${metadata.name} (${removes.length})`)
+            await super.remove(removes)
+        }
 
-            log.debug(`commit removes for ${metadata.name} (${changeSet.removes.length})`)
-            await super.remove(changeSet.removes)
+        for (const {metadata, extraUpserts} of changeSets) {
+            log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
+            await super.upsert(extraUpserts)
         }
 
         this.updates.clear()
     }
 
-    private collectChangeSets(entityClass: EntityTarget<Entity>): ChangeSet {
+    private getChangeSet<E extends Entity>(target: EntityTarget<E>): ChangeSet<E> {
         const em = this.em()
+        const metadata = em.connection.getMetadata(target)
 
-        const inserts: Entity[] = []
-        const upserts: Entity[] = []
-        const delayedUpserts: Entity[] = []
-        const removes: Entity[] = []
+        const inserts: E[] = []
+        const upserts: E[] = []
+        const removes: E[] = []
+        const extraUpserts: E[] = []
 
-        const updateMap = this.getUpdateMap(entityClass)
-        for (const {id, type} of updateMap) {
-            const cached = this.cache.get(entityClass, id)
+        const updates = this.updates.getUpdates(metadata.target)
+        for (const [id, type] of updates) {
+            const cached = this.cache.get(metadata.target, id) as CachedEntity<E>
 
             switch (type) {
                 case UpdateType.Insert: {
                     assert(cached?.value != null)
+
                     inserts.push(cached.value)
+
+                    const extraUpsert = this.extractExtraUpsert(cached.value)
+                    if (extraUpsert != null) {
+                        extraUpserts.push(extraUpsert)
+                    }
+
                     break
                 }
                 case UpdateType.Upsert: {
                     assert(cached?.value != null)
 
-                    let isDelayed = false
-                    for (const relation of this.getSelfRelations(entityClass)) {
-                        const relatedEntity = relation.getEntityValue(cached.value)
-                        if (relatedEntity == null) continue
+                    upserts.push(cached.value)
 
-                        const relatedUpdateType = updateMap.get(relatedEntity.id)
-                        if (relatedUpdateType === UpdateType.Insert) {
-                            isDelayed = true
-                            break
-                        }
+                    const extraUpsert = this.extractExtraUpsert(cached.value)
+                    if (extraUpsert != null) {
+                        extraUpserts.push(extraUpsert)
                     }
 
-                    if (isDelayed) {
-                        delayedUpserts.push(cached.value)
-                    } else {
-                        upserts.push(cached.value)
-                    }
                     break
                 }
                 case UpdateType.Remove: {
-                    const e = em.create(entityClass, {id})
+                    const e = em.create(metadata.target, {id}) as E
                     removes.push(e)
                     break
                 }
             }
         }
 
-        return {inserts, upserts, delayedUpserts, removes}
+        return {metadata, inserts, upserts, extraUpserts, removes}
+    }
+
+    private extractExtraUpsert<E extends Entity>(entity: E) {
+        const em = this.em()
+        const metadata = em.connection.getMetadata(entity.constructor)
+
+        const commitOrderIndex = this.getCommitOrderIndex(metadata)
+
+        let extraUpsert: E | undefined
+        for (const relation of metadata.relations) {
+            if (relation.foreignKeys.length == 0) continue
+
+            const invMetadata = relation.inverseEntityMetadata
+            const invEntity = relation.getEntityValue(entity)
+            if (invEntity == null || (metadata === invMetadata && invEntity.id === entity.id)) continue
+
+            const invCommitOrderIndex = this.getCommitOrderIndex(invMetadata)
+            if (invCommitOrderIndex < commitOrderIndex) continue
+
+            assert(relation.isNullable)
+
+            const invUpdateType = this.updates.get(invMetadata.target, invEntity.id)
+            if (invUpdateType === UpdateType.Insert) {
+                if (extraUpsert == null) {
+                    extraUpsert = em.create(metadata.target, {id: entity.id}) as E
+                    Object.assign(extraUpsert, entity)
+                }
+
+                relation.setEntityValue(entity, undefined)
+            }
+        }
+
+        return extraUpsert
     }
 
     async flush(): Promise<void> {
@@ -361,33 +370,20 @@ export class StoreWithCache extends Store {
     private async load(): Promise<void> {
         const em = this.em()
 
-        for (const [name, deferData] of this.deferMap) {
-            const metadata = em.connection.getMetadata(name)
+        for (const {target, data} of this.queue.values()) {
+            const metadata = em.connection.getMetadata(target)
 
-            for (const id of deferData.ids) {
+            for (const id of data.ids) {
                 this.cache.ensure(metadata.target, id)
             }
 
-            for (let batch of splitIntoBatches([...deferData.ids], 30000)) {
+            for (let batch of splitIntoBatches([...data.ids], 30000)) {
                 if (batch.length == 0) continue
-                await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: deferData.relations})
+                await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
             }
         }
 
-        this.deferMap.clear()
-    }
-
-    private knownSelfRelations: Record<string, RelationMetadata[]> = {}
-    private getSelfRelations<E extends Entity>(entityClass: EntityTarget<E>) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entityClass)
-
-        if (this.knownSelfRelations[metadata.name] == null) {
-            this.knownSelfRelations[metadata.name] = metadata.relations.filter(
-                (r) => r.inverseEntityMetadata.name === metadata.name
-            )
-        }
-        return this.knownSelfRelations[metadata.name]
+        this.queue.clear()
     }
 
     @def
@@ -396,35 +392,17 @@ export class StoreWithCache extends Store {
         return getCommitOrder(em.connection.entityMetadatas)
     }
 
-    private getDeferData(entityClass: EntityTarget<any>) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entityClass)
-
-        let list = this.deferMap.get(metadata.name)
-        if (list == null) {
-            list = {ids: new Set(), relations: {}}
-            this.deferMap.set(metadata.name, list)
+    private commitOrderIndexes: Map<EntityMetadata, number> | undefined
+    private getCommitOrderIndex(metadata: EntityMetadata) {
+        if (this.commitOrderIndexes == null) {
+            const order = this.getCommitOrder()
+            this.commitOrderIndexes = new Map(order.map((m, i) => [m, i]))
         }
 
-        return list
-    }
+        const index = this.commitOrderIndexes.get(metadata)
+        assert(index != null)
 
-    private getUpdateMap(entityClass: EntityTarget<any>) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entityClass)
-
-        let list = this.updates.get(metadata.name)
-        if (list == null) {
-            list = new UpdateMap()
-            this.updates.set(metadata.name, list)
-        }
-
-        return list
-    }
-
-    @def
-    private getLogger(): Logger {
-        return createLogger('sqd:store')
+        return index
     }
 
     // @ts-ignore
@@ -462,29 +440,6 @@ export class StoreWithCache extends Store {
     private async upsertMany(em: EntityManager, entityClass: EntityClass<any>, entities: any[]): Promise<void> {
         return super['upsertMany'](em, entityClass, entities)
     }
-}
-
-function mergeRelataions<E extends Entity>(
-    a: FindOptionsRelations<E>,
-    b: FindOptionsRelations<E>
-): FindOptionsRelations<E> {
-    const mergedObject: FindOptionsRelations<E> = {}
-
-    for (const key in a) {
-        mergedObject[key] = a[key]
-    }
-
-    for (const key in b) {
-        const bValue = b[key]
-        const value = mergedObject[key]
-        if (typeof bValue === 'object') {
-            mergedObject[key] = (typeof value === 'object' ? mergeRelataions(value, bValue) : bValue) as any
-        } else {
-            mergedObject[key] = value || bValue
-        }
-    }
-
-    return mergedObject
 }
 
 export class DeferredEntity<E extends Entity> {
