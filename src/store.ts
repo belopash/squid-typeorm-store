@@ -9,7 +9,7 @@ import {UpdateMap, UpdateType} from './updateMap'
 import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {createLogger, Logger} from '@subsquid/logger'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
-import {RelationGraph} from './relationGraph'
+import {getCommitOrder} from './relationGraph'
 
 export {EntityClass, FindManyOptions, FindOneOptions, Entity}
 
@@ -393,15 +393,7 @@ export class StoreWithCache extends Store {
     @def
     private getCommitOrder() {
         const em = this.em()
-        return this.buildRelationGraph().getCommitOrder(em.connection.entityMetadatas)
-    }
-
-    @def
-    private buildRelationGraph() {
-        const em = this.em()
-        const graph = new RelationGraph()
-
-        return graph
+        return getCommitOrder(em.connection.entityMetadatas)
     }
 
     private getDeferData(entityClass: EntityTarget<any>) {
