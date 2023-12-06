@@ -23,12 +23,6 @@ jobs:
           git config --global user.name 'github-actions'
           git config --global user.email 'github-actions@github.com'
 
-      - name: update changelog
-        run: | 
-          npx generate-changelog -p
-          git add CHANGELOG.md
-          git commit -m 'updated CHANGELOG.md'
-
       - name: bump version
         run: npm version ${{ github.event.inputs.version }} -m "bump to %s"
         
