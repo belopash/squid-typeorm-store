@@ -188,6 +188,22 @@ export class StoreWithCache extends Store {
         return e
     }
 
+    async getOrCreate<E extends Entity>(
+        entityClass: EntityTarget<E>,
+        id: string,
+        relations: FindOptionsRelations<E>,
+        create: (id: string) => E
+    ): Promise<E> {
+        let e = await this.get(entityClass, id, relations)
+
+        if (e == null) {
+            e = create(id)
+            await this.insert(e)
+        }
+
+        return e
+    }
+
     private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask: FindOptionsRelations<E> = {}) {
         const em = this.em()
         const metadata = em.connection.getMetadata(entityClass)

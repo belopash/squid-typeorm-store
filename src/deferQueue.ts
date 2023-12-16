@@ -56,7 +56,9 @@ function mergeRelataions<E extends Entity>(
         const bValue = b[key]
         const value = mergedObject[key]
         if (typeof bValue === 'object') {
-            mergedObject[key] = (typeof value === 'object' ? mergeRelataions(value, bValue) : bValue) as any
+            mergedObject[key] = (
+                typeof value === 'object' ? mergeRelataions(value as any, bValue as any) : bValue
+            ) as any
         } else {
             mergedObject[key] = value || bValue
         }
