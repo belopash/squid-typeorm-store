@@ -1,6 +1,6 @@
 {
     "name": "@belopash/typeorm-store",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "description": "Optimized TypeORM based storage for squid mappings",
     "main": "lib/index.js",
     "repository": {
