@@ -21,6 +21,11 @@ export type ChangeSet<E extends Entity> = {
     extraUpserts: E[]
 }
 
+export interface GetOptions<Entity = any> {
+    id: string
+    relations?: FindOptionsRelations<Entity>
+}
+
 // @ts-ignore
 export class StoreWithCache extends Store {
     private updates: UpdatesTracker
@@ -157,32 +162,34 @@ export class StoreWithCache extends Store {
         return res
     }
 
+    async get<E extends Entity>(entityClass: EntityTarget<E>, id: string): Promise<E | undefined>
+    async get<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E | undefined>
     async get<E extends Entity>(
         entityClass: EntityTarget<E>,
-        id: string,
-        relations?: FindOptionsRelations<E>
+        idOrOptions: string | GetOptions<E>
     ): Promise<E | undefined> {
         await this.load()
 
-        const entity = this.getCached(entityClass, id, relations)
+        const {id, ...options} = parseGetOptions(idOrOptions)
+
+        const entity = this.getCached(entityClass, id, options.relations)
 
         if (entity !== undefined) {
             return entity == null ? undefined : entity
         } else {
-            return await this.findOne(entityClass, {where: {id} as any, relations})
+            return await this.findOne(entityClass, {where: {id} as any, relations: options.relations})
         }
     }
 
-    async getOrFail<E extends Entity>(
-        entityClass: EntityTarget<E>,
-        id: string,
-        relations?: FindOptionsRelations<E>
-    ): Promise<E> {
-        let e = await this.get(entityClass, id, relations)
+    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, id: string): Promise<E>
+    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E>
+    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, idOrOptions: string | GetOptions<E>): Promise<E> {
+        const options = parseGetOptions(idOrOptions)
+        let e = await this.get(entityClass, options)
 
         if (e == null) {
             const metadata = this.em().connection.getMetadata(entityClass)
-            throw new Error(`Missing entity ${metadata.name} with id "${id}"`)
+            throw new Error(`Missing entity ${metadata.name} with id "${options.id}"`)
         }
 
         return e
@@ -191,13 +198,23 @@ export class StoreWithCache extends Store {
     async getOrCreate<E extends Entity>(
         entityClass: EntityTarget<E>,
         id: string,
-        relations: FindOptionsRelations<E>,
-        create: (id: string) => E
+        create: (id: string) => E | Promise<E>
+    ): Promise<E>
+    async getOrCreate<E extends Entity>(
+        entityClass: EntityTarget<E>,
+        options: GetOptions<E>,
+        create: (id: string) => E | Promise<E>
+    ): Promise<E>
+    async getOrCreate<E extends Entity>(
+        entityClass: EntityTarget<E>,
+        idOrOptions: string | GetOptions<E>,
+        create: (id: string) => E | Promise<E>
     ): Promise<E> {
-        let e = await this.get(entityClass, id, relations)
+        const options = parseGetOptions(idOrOptions)
+        let e = await this.get(entityClass, options)
 
         if (e == null) {
-            e = create(id)
+            e = await create(options.id)
             await this.insert(e)
         }
 
@@ -250,16 +267,16 @@ export class StoreWithCache extends Store {
         }
     }
 
-    defer<E extends Entity>(
-        entityClass: EntityTarget<E>,
-        id: string,
-        relations?: FindOptionsRelations<E>
-    ): DeferredEntity<E> {
-        this.queue.add(entityClass, id, relations)
+    defer<E extends Entity>(entityClass: EntityTarget<E>, id: string): DeferredEntity<E>
+    defer<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): DeferredEntity<E>
+    defer<E extends Entity>(entityClass: EntityTarget<E>, idOrOptions: string | GetOptions<E>): DeferredEntity<E> {
+        const options = parseGetOptions(idOrOptions)
+        this.queue.add(entityClass, options.id, options.relations)
 
         return new DeferredEntity({
-            get: async () => this.get(entityClass, id, relations),
-            getOrFail: async () => this.getOrFail(entityClass, id, relations),
+            get: async () => this.get(entityClass, options),
+            getOrFail: async () => this.getOrFail(entityClass, options),
+            getOrCreate: async (create) => this.getOrCreate(entityClass, options, create),
         })
     }
 
@@ -459,13 +476,31 @@ export class StoreWithCache extends Store {
 }
 
 export class DeferredEntity<E extends Entity> {
-    constructor(private opts: {get: () => Promise<E | undefined>; getOrFail: () => Promise<E>}) {}
+    constructor(
+        private opts: {
+            get: () => Promise<E | undefined>
+            getOrFail: () => Promise<E>
+            getOrCreate: (create: (id: string) => E | Promise<E>) => Promise<E>
+        }
+    ) {}
 
     async get(): Promise<E | undefined> {
-        return await this.opts.get()
+        return this.opts.get()
     }
 
     async getOrFail(): Promise<E> {
-        return await this.opts.getOrFail()
+        return this.opts.getOrFail()
+    }
+
+    async getOrCreate(create: (id: string) => E | Promise<E>): Promise<E> {
+        return this.opts.getOrCreate(create)
+    }
+}
+
+function parseGetOptions<E>(idOrOptions: string | GetOptions<E>): GetOptions<E> {
+    if (typeof idOrOptions === 'string') {
+        return {id: idOrOptions}
+    } else {
+        return idOrOptions
     }
 }
