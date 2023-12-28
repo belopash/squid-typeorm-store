@@ -195,17 +195,17 @@ export class StoreWithCache extends Store {
         return e
     }
 
-    async getOrCreate<E extends Entity>(
+    async getOrInsert<E extends Entity>(
         entityClass: EntityTarget<E>,
         id: string,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrCreate<E extends Entity>(
+    async getOrInsert<E extends Entity>(
         entityClass: EntityTarget<E>,
         options: GetOptions<E>,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrCreate<E extends Entity>(
+    async getOrInsert<E extends Entity>(
         entityClass: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>,
         create: (id: string) => E | Promise<E>
@@ -219,6 +219,17 @@ export class StoreWithCache extends Store {
         }
 
         return e
+    }
+
+    /**
+     * @deprecated use {@link getOrInsert} instead
+     */
+    async getOrCreate<E extends Entity>(
+        entityClass: EntityTarget<E>,
+        idOrOptions: string | GetOptions<E>,
+        create: (id: string) => E | Promise<E>
+    ) {
+        return this.getOrInsert(entityClass, idOrOptions as any, create)
     }
 
     private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask: FindOptionsRelations<E> = {}) {
@@ -276,7 +287,7 @@ export class StoreWithCache extends Store {
         return new DeferredEntity({
             get: async () => this.get(entityClass, options),
             getOrFail: async () => this.getOrFail(entityClass, options),
-            getOrCreate: async (create) => this.getOrCreate(entityClass, options, create),
+            getOrInsert: async (create) => this.getOrInsert(entityClass, options, create),
         })
     }
 
@@ -480,7 +491,7 @@ export class DeferredEntity<E extends Entity> {
         private opts: {
             get: () => Promise<E | undefined>
             getOrFail: () => Promise<E>
-            getOrCreate: (create: (id: string) => E | Promise<E>) => Promise<E>
+            getOrInsert: (create: (id: string) => E | Promise<E>) => Promise<E>
         }
     ) {}
 
@@ -492,8 +503,15 @@ export class DeferredEntity<E extends Entity> {
         return this.opts.getOrFail()
     }
 
+    async getOrInsert(create: (id: string) => E | Promise<E>): Promise<E> {
+        return this.opts.getOrInsert(create)
+    }
+
+    /**
+     * @deprecated use {@link getOrInsert} instead
+     */
     async getOrCreate(create: (id: string) => E | Promise<E>): Promise<E> {
-        return this.opts.getOrCreate(create)
+        return this.getOrInsert(create)
     }
 }
 
