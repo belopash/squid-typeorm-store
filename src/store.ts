@@ -168,17 +168,17 @@ export class StoreWithCache extends Store {
         entityClass: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>
     ): Promise<E | undefined> {
-        await this.load()
-
         const {id, ...options} = parseGetOptions(idOrOptions)
 
-        const entity = this.getCached(entityClass, id, options.relations)
+        let entity = this.getCached(entityClass, id, options.relations)
+        if (entity !== undefined) return entity ?? undefined
+        
+        await this.load()
 
-        if (entity !== undefined) {
-            return entity == null ? undefined : entity
-        } else {
-            return await this.findOne(entityClass, {where: {id} as any, relations: options.relations})
-        }
+        entity = this.getCached(entityClass, id, options.relations)
+        if (entity !== undefined) return entity ?? undefined
+
+        return await this.findOne(entityClass, {where: {id} as any, relations: options.relations})
     }
 
     async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, id: string): Promise<E>
