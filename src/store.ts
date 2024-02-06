@@ -363,7 +363,7 @@ export class StoreWithCache extends Store {
                     break
                 }
                 case UpdateType.Remove: {
-                    const e = em.create(metadata.target, {id}) as E
+                    const e = em.create(metadata.target, {id} as any) as E
                     removes.push(e)
                     break
                 }
@@ -395,7 +395,7 @@ export class StoreWithCache extends Store {
             const invUpdateType = this.updates.get(invMetadata.target, invEntity.id)
             if (invUpdateType === UpdateType.Insert) {
                 if (extraUpsert == null) {
-                    extraUpsert = em.create(metadata.target, {id: entity.id}) as E
+                    extraUpsert = em.create(metadata.target, {id: entity.id} as any) as E
                     Object.assign(extraUpsert, entity)
                 }
 
