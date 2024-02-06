@@ -50,7 +50,7 @@ export class StoreWithCache extends Store {
         const entityClass = entities[0].constructor as EntityTarget<E>
         for (const entity of entities) {
             this.updates.insert(entityClass, entity.id)
-            this.cache.add(entity)
+            this.cache.add(entity, {isNew: true})
         }
     }
 
@@ -114,7 +114,7 @@ export class StoreWithCache extends Store {
     async find<E extends Entity>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
         await this.commit()
         const res = await super.find(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, options.relations)
+        if (res != null) this.cache.add(res, {mask: options.relations})
         return res
     }
 
@@ -131,14 +131,14 @@ export class StoreWithCache extends Store {
     async findOne<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E | undefined> {
         await this.commit()
         const res = await super.findOne(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, options.relations)
+        if (res != null) this.cache.add(res, {mask: options.relations})
         return res
     }
 
     async findOneOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
         await this.commit()
         const res = await super.findOneOrFail(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, options.relations)
+        if (res != null) this.cache.add(res, {mask: options.relations})
         return res
     }
 
@@ -172,7 +172,7 @@ export class StoreWithCache extends Store {
 
         let entity = this.getCached(entityClass, id, options.relations)
         if (entity !== undefined) return entity ?? undefined
-        
+
         await this.load()
 
         entity = this.getCached(entityClass, id, options.relations)

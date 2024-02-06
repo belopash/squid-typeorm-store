@@ -59,18 +59,25 @@ export class CacheMap {
         this.map.clear()
     }
 
-    add<E extends Entity>(entity: E, mask?: FindOptionsRelations<E>): void
-    add<E extends Entity>(entities: E[], mask?: FindOptionsRelations<E>): void
-    add<E extends Entity>(e: E | E[], mask: FindOptionsRelations<E> = {}) {
+    add<E extends Entity>(e: E | E[], opts: {mask?: FindOptionsRelations<E>; isNew?: boolean} = {}) {
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length === 0) return
 
         for (const entity of entities) {
-            this.cacheEntity(entity, mask)
+            this.cacheEntity(entity, opts)
         }
     }
 
-    private cacheEntity(entity: Entity, mask: FindOptionsRelations<any>) {
+    private cacheEntity(
+        entity: Entity,
+        {
+            mask = {},
+            isNew = false,
+        }: {
+            mask?: FindOptionsRelations<any>
+            isNew?: boolean
+        }
+    ) {
         const em = this.em()
 
         const entityClass = entity.constructor
@@ -90,11 +97,25 @@ export class CacheMap {
             this.getLogger().debug(`added entity ${metadata.name} ${entity.id}`)
         }
 
-        this.cacheColumns(metadata.nonVirtualColumns, entity, cachedEntity.value)
-        this.cacheRelatedEntities(metadata.relations, entity, cachedEntity.value, mask)
+        this.cacheColumns({columns: metadata.nonVirtualColumns, sourceEntity: entity, cachedEntity: cachedEntity.value})
+        this.cacheRelatedEntities({
+            relations: metadata.relations,
+            sourceEntity: entity,
+            cachedEntity: cachedEntity.value,
+            mask,
+            isNew,
+        })
     }
 
-    private cacheColumns(columns: ColumnMetadata[], sourceEntity: Entity, cachedEntity: Entity) {
+    private cacheColumns({
+        columns,
+        sourceEntity,
+        cachedEntity,
+    }: {
+        columns: ColumnMetadata[]
+        sourceEntity: Entity
+        cachedEntity: Entity
+    }) {
         for (const column of columns) {
             const objectColumnValue = column.getEntityValue(sourceEntity)
             if (objectColumnValue !== undefined) {
@@ -103,42 +124,50 @@ export class CacheMap {
         }
     }
 
-    private cacheRelatedEntities(
-        relations: RelationMetadata[],
-        sourceEntity: Entity,
-        cachedEntity: Entity,
+    private cacheRelatedEntities({
+        relations,
+        sourceEntity,
+        cachedEntity,
+        mask,
+        isNew,
+    }: {
+        relations: RelationMetadata[]
+        sourceEntity: Entity
+        cachedEntity: Entity
         mask: FindOptionsRelations<any>
-    ) {
+        isNew: boolean
+    }) {
         for (const relation of relations) {
             const invMetadata = relation.inverseEntityMetadata
             const invEntity = relation.getEntityValue(sourceEntity)
             const invMask = mask[relation.propertyName]
-            if (invEntity === undefined) continue
 
             if (invMask) {
                 if (relation.isOneToMany || relation.isManyToMany) {
                     if (!Array.isArray(invEntity)) continue
 
                     for (const entity of invEntity) {
-                        this.cacheEntity(entity, typeof invMask === 'boolean' ? {} : invMask)
+                        this.cacheEntity(entity, {mask: typeof invMask === 'boolean' ? {} : invMask})
                     }
                 } else if (invEntity != null) {
-                    this.cacheEntity(invEntity, typeof invMask === 'boolean' ? {} : invMask)
+                    this.cacheEntity(invEntity, {mask: typeof invMask === 'boolean' ? {} : invMask})
                 }
             }
 
             if (relation.isOwning) {
-                if (invEntity === null) {
-                    relation.setEntityValue(cachedEntity, null)
+                if (invEntity == null) {
+                    if (invEntity === null || isNew) {
+                        relation.setEntityValue(cachedEntity, null)
+                    }
                 } else {
                     const relationCacheMap = this.getEntityCache(invMetadata.target)
-                    const cachedRelation = relationCacheMap.get(invEntity.id)
+                    const cachedRelation = relationCacheMap.get(invEntity.id)?.value
 
                     if (cachedRelation == null) {
                         throw new Error(`Missing entity ${invMetadata.name} with id ${invEntity.id}`)
                     }
 
-                    relation.setEntityValue(cachedEntity, cachedRelation.value)
+                    relation.setEntityValue(cachedEntity, cachedRelation)
                 }
             }
         }
