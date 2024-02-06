@@ -303,22 +303,30 @@ export class StoreWithCache extends Store {
         }
 
         for (const {metadata, inserts, upserts} of changeSets) {
-            log.debug(`commit upserts for ${metadata.name} (${upserts.length})`)
-            await super.upsert(upserts)
+            if (upserts.length > 0) {
+                log.debug(`commit upserts for ${metadata.name} (${upserts.length})`)
+                await super.upsert(upserts)
+            }
 
-            log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
-            await super.insert(inserts)
+            if (inserts.length) {
+                log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
+                await super.insert(inserts)
+            }
         }
 
         const changeSetsReversed = [...changeSets].reverse()
         for (const {metadata, removes} of changeSetsReversed) {
-            log.debug(`commit removes for ${metadata.name} (${removes.length})`)
-            await super.remove(removes)
+            if (removes.length > 0) {
+                log.debug(`commit removes for ${metadata.name} (${removes.length})`)
+                await super.remove(removes)
+            }
         }
 
         for (const {metadata, extraUpserts} of changeSets) {
-            log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
-            await super.upsert(extraUpserts)
+            if (extraUpserts.length) {
+                log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
+                await super.upsert(extraUpserts)
+            }
         }
 
         this.updates.clear()
