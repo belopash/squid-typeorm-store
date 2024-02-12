@@ -7,15 +7,33 @@ import {getEntityManager, useDatabase} from './util'
 
 describe('Store', function () {
     describe('.save()', function () {
-        useDatabase([`CREATE TABLE item (id text primary key , name text)`])
+        useDatabase([`CREATE TABLE item (id text primary key , name text)`, `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`])
 
-        it('saving of a single entity', async function () {
+        it('get single entity', async function () {
+            let store = await createStore()
+            await store.save(new Item('1', 'a'))
+            await expect(store.get(Item, '1')).resolves.toEqual({id: '1', name: 'a'})
+        })
+
+        it('get single entity with relation', async function () {
+            let store = await createStore()
+            const item = new Item('1', 'a')
+            await store.save(item)
+            await store.save(new Order({id: '1', qty: 1, item}))
+            await expect(store.get(Order, {id: '1', relations: {item: true}})).resolves.toEqual({
+                id: '1',
+                qty: 1,
+                item: {id: '1', name: 'a'},
+            })
+        })
+
+        it('save single entity', async function () {
             let store = await createStore()
             await store.save(new Item('1', 'a'))
             await expect(getItems(store)).resolves.toEqual([{id: '1', name: 'a'}])
         })
 
-        it('saving of multiple entities', async function () {
+        it('save multiple entities', async function () {
             let store = await createStore()
             await store.save([new Item('1', 'a'), new Item('2', 'b')])
             await expect(getItems(store)).resolves.toEqual([
@@ -24,7 +42,7 @@ describe('Store', function () {
             ])
         })
 
-        it('saving a large amount of entities', async function () {
+        it('save a large amount of entities', async function () {
             let store = await createStore()
             let items: Item[] = []
             for (let i = 0; i < 20000; i++) {
@@ -53,25 +71,25 @@ describe('Store', function () {
             `INSERT INTO item (id, name) values ('3', 'c')`,
         ])
 
-        it('removal by passing an entity', async function () {
+        it('remove by passing an entity', async function () {
             let store = await createStore()
             await store.remove(new Item('1'))
             await expect(getItemIds(store)).resolves.toEqual(['2', '3'])
         })
 
-        it('removal by passing an array of entities', async function () {
+        it('remove by passing an array of entities', async function () {
             let store = await createStore()
             await store.remove([new Item('1'), new Item('3')])
             await expect(getItemIds(store)).resolves.toEqual(['2'])
         })
 
-        it('removal by passing an id', async function () {
+        it('remove by passing an id', async function () {
             let store = await createStore()
             await store.remove(Item, '1')
             await expect(getItemIds(store)).resolves.toEqual(['2', '3'])
         })
 
-        it('removal by passing an array of ids', async function () {
+        it('remove by passing an array of ids', async function () {
             let store = await createStore()
             await store.remove(Item, ['1', '2'])
             await expect(getItemIds(store)).resolves.toEqual(['3'])

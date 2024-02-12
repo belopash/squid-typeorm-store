@@ -5,6 +5,7 @@ import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
+import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {CachedEntity, CacheMap} from './cacheMap'
 import {UpdatesTracker, UpdateType} from './changeTracker'
 import {DeferQueue} from './deferQueue'
@@ -47,10 +48,9 @@ export class StoreWithCache extends Store {
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
-        const entityClass = entities[0].constructor as EntityTarget<E>
         for (const entity of entities) {
-            this.updates.insert(entityClass, entity.id)
-            this.cache.add(entity, {isNew: true})
+            this.updates.insert(entity.constructor, entity.id)
+            this.cache.add(entity, true)
         }
     }
 
@@ -60,9 +60,8 @@ export class StoreWithCache extends Store {
         let entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
-        const entityClass = entities[0].constructor as EntityTarget<E>
         for (const entity of entities) {
-            this.updates.upsert(entityClass, entity.id)
+            this.updates.upsert(entity.constructor, entity.id)
             this.cache.add(entity)
         }
     }
@@ -81,8 +80,8 @@ export class StoreWithCache extends Store {
             const entities = Array.isArray(e) ? e : [e as E]
             if (entities.length == 0) return
 
-            const entityClass = entities[0].constructor as EntityTarget<E>
             for (const entity of entities) {
+                const entityClass = entity.constructor
                 this.updates.remove(entityClass, entity.id)
                 this.cache.delete(entityClass, entity.id)
             }
@@ -114,7 +113,9 @@ export class StoreWithCache extends Store {
     async find<E extends Entity>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
         await this.commit()
         const res = await super.find(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, {mask: options.relations})
+        for (const entity of res) {
+            this.traverseEntity(entity, options.relations || null, (e) => this.cache.add(e))
+        }
         return res
     }
 
@@ -124,21 +125,25 @@ export class StoreWithCache extends Store {
     ): Promise<E[]> {
         await this.commit()
         const res = await super.findBy(entityClass as EntityClass<E>, where)
-        if (res != null) this.cache.add(res)
+        for (const entity of res) {
+            this.traverseEntity(entity, null, (e) => this.cache.add(e))
+        }
         return res
     }
 
     async findOne<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E | undefined> {
         await this.commit()
         const res = await super.findOne(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, {mask: options.relations})
+        if (res != null) {
+            this.traverseEntity(res, options.relations || null, (e) => this.cache.add(e))
+        }
         return res
     }
 
     async findOneOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
         await this.commit()
         const res = await super.findOneOrFail(entityClass as EntityClass<E>, options)
-        if (res != null) this.cache.add(res, {mask: options.relations})
+        this.traverseEntity(res, options.relations || null, (e) => this.cache.add(e))
         return res
     }
 
@@ -148,7 +153,9 @@ export class StoreWithCache extends Store {
     ): Promise<E | undefined> {
         await this.commit()
         const res = await super.findOneBy(entityClass as EntityClass<E>, where)
-        if (res != null) this.cache.add(res)
+        if (res != null) {
+            this.traverseEntity(res, null, (e) => this.cache.add(e))
+        }
         return res
     }
 
@@ -158,7 +165,7 @@ export class StoreWithCache extends Store {
     ): Promise<E> {
         await this.commit()
         const res = await super.findOneByOrFail(entityClass as EntityClass<E>, where)
-        if (res != null) this.cache.add(res)
+        this.traverseEntity(res, null, (e) => this.cache.add(e))
         return res
     }
 
@@ -188,7 +195,7 @@ export class StoreWithCache extends Store {
         let e = await this.get(entityClass, options)
 
         if (e == null) {
-            const metadata = this.em().connection.getMetadata(entityClass)
+            const metadata = this.getEntityMetadata(entityClass)
             throw new Error(`Missing entity ${metadata.name} with id "${options.id}"`)
         }
 
@@ -230,52 +237,6 @@ export class StoreWithCache extends Store {
         create: (id: string) => E | Promise<E>
     ) {
         return this.getOrInsert(entityClass, idOrOptions as any, create)
-    }
-
-    private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask: FindOptionsRelations<E> = {}) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entityClass)
-
-        const cachedEntity = this.cache.get(entityClass, id)
-
-        if (cachedEntity == null) {
-            return undefined
-        } else if (cachedEntity.value == null) {
-            return null
-        } else {
-            const clonedEntity = em.create(entityClass)
-
-            for (const column of metadata.nonVirtualColumns) {
-                const objectColumnValue = column.getEntityValue(cachedEntity.value)
-                if (objectColumnValue !== undefined) {
-                    column.setEntityValue(clonedEntity, copy(objectColumnValue))
-                }
-            }
-
-            for (const relation of metadata.relations) {
-                let invMask = mask[relation.propertyName as keyof E]
-                if (!invMask) continue
-
-                const invEntity = relation.getEntityValue(cachedEntity.value)
-
-                if (invEntity === undefined) {
-                    return undefined // relation is missing, but required
-                } else if (invEntity == null) {
-                    relation.setEntityValue(clonedEntity, null)
-                } else {
-                    const cachedRelatedEntity = this.getCached(
-                        relation.inverseEntityMetadata.target,
-                        invEntity.id,
-                        typeof invMask === 'boolean' ? {} : invMask
-                    )
-                    assert(cachedRelatedEntity != null)
-
-                    relation.setEntityValue(clonedEntity, cachedRelatedEntity)
-                }
-            }
-
-            return clonedEntity
-        }
     }
 
     defer<E extends Entity>(entityClass: EntityTarget<E>, id: string): DeferredEntity<E>
@@ -332,9 +293,17 @@ export class StoreWithCache extends Store {
         this.updates.clear()
     }
 
+    clear(): void {
+        this.cache.clear()
+    }
+
+    async flush(): Promise<void> {
+        await this.commit()
+        this.clear()
+    }
+
     private getChangeSet<E extends Entity>(target: EntityTarget<E>): ChangeSet<E> {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(target)
+        const metadata = this.getEntityMetadata(target)
 
         const inserts: E[] = []
         const upserts: E[] = []
@@ -351,7 +320,7 @@ export class StoreWithCache extends Store {
 
                     inserts.push(cached.value)
 
-                    const extraUpsert = this.extractExtraUpsert(cached.value)
+                    const extraUpsert = this.getExtraUpsert(cached.value)
                     if (extraUpsert != null) {
                         extraUpserts.push(extraUpsert)
                     }
@@ -363,7 +332,7 @@ export class StoreWithCache extends Store {
 
                     upserts.push(cached.value)
 
-                    const extraUpsert = this.extractExtraUpsert(cached.value)
+                    const extraUpsert = this.getExtraUpsert(cached.value)
                     if (extraUpsert != null) {
                         extraUpserts.push(extraUpsert)
                     }
@@ -371,7 +340,8 @@ export class StoreWithCache extends Store {
                     break
                 }
                 case UpdateType.Remove: {
-                    const e = em.create(metadata.target, {id} as any) as E
+                    const e = metadata.create() as E
+                    e.id = id
                     removes.push(e)
                     break
                 }
@@ -381,49 +351,9 @@ export class StoreWithCache extends Store {
         return {metadata, inserts, upserts, extraUpserts, removes}
     }
 
-    private extractExtraUpsert<E extends Entity>(entity: E) {
-        const em = this.em()
-        const metadata = em.connection.getMetadata(entity.constructor)
-
-        const commitOrderIndex = this.getCommitOrderIndex(metadata)
-
-        let extraUpsert: E | undefined
-        for (const relation of metadata.relations) {
-            if (relation.foreignKeys.length == 0) continue
-
-            const invMetadata = relation.inverseEntityMetadata
-            const invEntity = relation.getEntityValue(entity)
-            if (invEntity == null || (metadata === invMetadata && invEntity.id === entity.id)) continue
-
-            const invCommitOrderIndex = this.getCommitOrderIndex(invMetadata)
-            if (invCommitOrderIndex < commitOrderIndex) continue
-
-            assert(relation.isNullable)
-
-            const invUpdateType = this.updates.get(invMetadata.target, invEntity.id)
-            if (invUpdateType === UpdateType.Insert) {
-                if (extraUpsert == null) {
-                    extraUpsert = em.create(metadata.target, {id: entity.id} as any) as E
-                    Object.assign(extraUpsert, entity)
-                }
-
-                relation.setEntityValue(entity, undefined)
-            }
-        }
-
-        return extraUpsert
-    }
-
-    async flush(): Promise<void> {
-        await this.commit()
-        this.cache.clear()
-    }
-
     private async load(): Promise<void> {
-        const em = this.em()
-
         for (const {target, data} of this.queue.values()) {
-            const metadata = em.connection.getMetadata(target)
+            const metadata = this.getEntityMetadata(target)
 
             for (const id of data.ids) {
                 this.cache.ensure(metadata.target, id)
@@ -436,6 +366,53 @@ export class StoreWithCache extends Store {
         }
 
         this.queue.clear()
+    }
+
+    private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask?: FindOptionsRelations<any>) {
+        const cached = this.cache.get(entityClass, id)
+
+        if (cached == null) {
+            return undefined
+        } else if (cached.value == null) {
+            return null
+        } else {
+            return this.cloneEntity(cached.value, mask || null)
+        }
+    }
+
+    private getExtraUpsert<E extends Entity>(entity: E) {
+        const metadata = this.getEntityMetadata(entity.constructor)
+
+        const commitOrderIndex = this.getCommitOrderIndex(metadata)
+
+        let extraUpsert: E | undefined
+        for (const relation of metadata.relations) {
+            if (relation.foreignKeys.length == 0) continue
+
+            const inverseEntity = relation.getEntityValue(entity)
+            if (inverseEntity == null) continue
+
+            const inverseMetadata = relation.inverseEntityMetadata
+            if (metadata === inverseMetadata && inverseEntity.id === entity.id) continue
+
+            const invCommitOrderIndex = this.getCommitOrderIndex(inverseMetadata)
+            if (invCommitOrderIndex < commitOrderIndex) continue
+
+            assert(relation.isNullable)
+
+            const invUpdateType = this.updates.get(inverseMetadata.target, inverseEntity.id)
+            if (invUpdateType === UpdateType.Insert) {
+                if (extraUpsert == null) {
+                    extraUpsert = metadata.create() as E
+                    extraUpsert.id = entity.id
+                    Object.assign(extraUpsert, entity)
+                }
+
+                relation.setEntityValue(entity, undefined)
+            }
+        }
+
+        return extraUpsert
     }
 
     @def
@@ -455,6 +432,73 @@ export class StoreWithCache extends Store {
         assert(index != null)
 
         return index
+    }
+
+    private cloneEntity<E extends Entity>(entity: E, mask: FindOptionsRelations<any> | null): E | undefined {
+        const metadata = this.getEntityMetadata(entity.constructor)
+
+        const clonedEntity = metadata.create()
+
+        for (const column of metadata.nonVirtualColumns) {
+            const objectColumnValue = column.getEntityValue(entity)
+            if (objectColumnValue !== undefined) {
+                column.setEntityValue(clonedEntity, copy(objectColumnValue))
+            }
+        }
+
+        if (mask != null) {
+            for (const relation of metadata.relations) {
+                const inverseMask = mask[relation.propertyName]
+                if (!inverseMask) continue
+
+                const inverseEntity = relation.getEntityValue(relation)
+                if (inverseEntity === undefined) {
+                    return undefined // relation is missing, but required
+                } else if (inverseEntity === null) {
+                    relation.setEntityValue(clonedEntity, null)
+                } else {
+                    const cachedInverseEntity = this.cloneEntity(
+                        inverseEntity,
+                        typeof inverseMask === 'boolean' ? null : inverseMask
+                    )
+                    if (cachedInverseEntity == null) {
+                        return undefined
+                    } else {
+                        relation.setEntityValue(clonedEntity, cachedInverseEntity)
+                    }
+                }
+            }
+        }
+
+        return clonedEntity
+    }
+
+    private traverseEntity(entity: Entity, mask: FindOptionsRelations<any> | null, fn: (e: Entity) => void) {
+        const metadata = this.getEntityMetadata(entity.constructor)
+
+        if (mask != null) {
+            for (const relation of metadata.relations) {
+                const inverseMask = mask[relation.propertyName]
+                if (!inverseMask) continue
+
+                const inverseEntity = relation.getEntityValue(entity)
+                if (relation.isOneToMany || relation.isManyToMany) {
+                    if (!Array.isArray(inverseEntity)) continue
+                    for (const entity of inverseEntity) {
+                        this.traverseEntity(entity, inverseMask === true ? null : inverseMask, fn)
+                    }
+                } else if (inverseEntity != null) {
+                    this.traverseEntity(inverseEntity, inverseMask === true ? null : inverseMask, fn)
+                }
+            }
+        }
+
+        fn(entity)
+    }
+
+    private getEntityMetadata(entityClass: EntityTarget<any>) {
+        const em = this.em()
+        return em.connection.getMetadata(entityClass)
     }
 
     // @ts-ignore

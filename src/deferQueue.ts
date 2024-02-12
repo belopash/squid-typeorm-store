@@ -1,5 +1,6 @@
 import {Entity} from '@subsquid/typeorm-store'
 import {EntityManager, EntityTarget, FindOptionsRelations} from 'typeorm'
+import {mergeRelataions} from './utils'
 
 export type DeferData = {
     ids: Set<string>
@@ -40,29 +41,4 @@ export class DeferQueue {
     clear() {
         this.deferMap.clear()
     }
-}
-
-function mergeRelataions<E extends Entity>(
-    a: FindOptionsRelations<E>,
-    b: FindOptionsRelations<E>
-): FindOptionsRelations<E> {
-    const mergedObject: FindOptionsRelations<E> = {}
-
-    for (const key in a) {
-        mergedObject[key] = a[key]
-    }
-
-    for (const key in b) {
-        const bValue = b[key]
-        const value = mergedObject[key]
-        if (typeof bValue === 'object') {
-            mergedObject[key] = (
-                typeof value === 'object' ? mergeRelataions(value as any, bValue as any) : bValue
-            ) as any
-        } else {
-            mergedObject[key] = value || bValue
-        }
-    }
-
-    return mergedObject
 }

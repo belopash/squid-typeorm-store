@@ -28,6 +28,10 @@ export class Order {
 
     @Column({nullable: false})
     qty!: number
+
+    constructor(opts: Order) {
+        Object.assign(this, opts)
+    }
 }
 
 
