@@ -5,7 +5,6 @@ import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
-import {RelationMetadata} from 'typeorm/metadata/RelationMetadata'
 import {CachedEntity, CacheMap} from './cacheMap'
 import {UpdatesTracker, UpdateType} from './changeTracker'
 import {DeferQueue} from './deferQueue'
@@ -320,7 +319,7 @@ export class StoreWithCache extends Store {
 
                     inserts.push(cached.value)
 
-                    const extraUpsert = this.getExtraUpsert(cached.value)
+                    const extraUpsert = this.extractExtraUpsert(cached.value)
                     if (extraUpsert != null) {
                         extraUpserts.push(extraUpsert)
                     }
@@ -332,7 +331,7 @@ export class StoreWithCache extends Store {
 
                     upserts.push(cached.value)
 
-                    const extraUpsert = this.getExtraUpsert(cached.value)
+                    const extraUpsert = this.extractExtraUpsert(cached.value)
                     if (extraUpsert != null) {
                         extraUpserts.push(extraUpsert)
                     }
@@ -380,7 +379,7 @@ export class StoreWithCache extends Store {
         }
     }
 
-    private getExtraUpsert<E extends Entity>(entity: E) {
+    private extractExtraUpsert<E extends Entity>(entity: E) {
         const metadata = this.getEntityMetadata(entity.constructor)
 
         const commitOrderIndex = this.getCommitOrderIndex(metadata)
@@ -451,7 +450,7 @@ export class StoreWithCache extends Store {
                 const inverseMask = mask[relation.propertyName]
                 if (!inverseMask) continue
 
-                const inverseEntity = relation.getEntityValue(relation)
+                const inverseEntity = relation.getEntityValue(entity)
                 if (inverseEntity === undefined) {
                     return undefined // relation is missing, but required
                 } else if (inverseEntity === null) {
