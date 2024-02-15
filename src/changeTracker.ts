@@ -28,27 +28,38 @@ export class UpdatesTracker {
 
     insert<E extends Entity>(target: EntityTarget<E>, id: string) {
         const prevType = this.get(target, id)
-        if (prevType === UpdateType.Insert || prevType === UpdateType.Upsert) {
-            throw new Error(`ID ${id} is already marked as insert or upsert`)
-        } else {
-            this.set(target, id, UpdateType.Insert)
+        switch (prevType) {
+            case undefined:
+                this.set(target, id, UpdateType.Insert)
+                break
+            case UpdateType.Remove:
+                this.set(target, id, UpdateType.Upsert)
+                break
+            case UpdateType.Insert:
+            case UpdateType.Insert:
+                throw new Error(`ID ${id} is already marked as insert or upsert`)
         }
     }
 
     upsert<E extends Entity>(target: EntityTarget<E>, id: string) {
         const prevType = this.get(target, id)
-        if (prevType === UpdateType.Insert) {
-        } else {
-            this.set(target, id, UpdateType.Upsert)
+        switch (prevType) {
+            case UpdateType.Insert:
+                break
+            default:
+                this.set(target, id, UpdateType.Upsert)
+                break
         }
     }
 
     remove<E extends Entity>(target: EntityTarget<E>, id: string) {
         const prevType = this.get(target, id)
-        if (prevType == UpdateType.Insert) {
-            this.getUpdates(target).delete(id)
-        } else {
-            this.set(target, id, UpdateType.Remove)
+        switch (prevType) {
+            case UpdateType.Insert:
+                this.getUpdates(target).delete(id)
+                break
+            default:
+                this.set(target, id, UpdateType.Remove)
         }
     }
 
