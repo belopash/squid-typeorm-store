@@ -19,6 +19,11 @@ export class TypeormDatabaseWithCache extends TypeormDatabase {
         return super.transactHot(info, cb as any)
     }
 
+    // @ts-ignore
+    transactHot2(info: HotTxInfo, cb: (store: StoreWithCache, sliceBeg: number, sliceEnd: number) => Promise<void>): Promise<void> {
+        return super.transactHot2(info, cb as any)
+    }
+
     private async performUpdates(
         cb: (store: StoreWithCache) => Promise<void>,
         em: EntityManager,
