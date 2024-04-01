@@ -1,5 +1,5 @@
 import {Entity} from '@subsquid/typeorm-store'
-import {EntityManager, EntityMetadata, EntityTarget} from 'typeorm'
+import {EntityMetadata} from 'typeorm'
 import {copy} from './utils'
 import {Logger} from '@subsquid/logger'
 
@@ -15,25 +15,22 @@ export class CacheMap {
     private map: Map<EntityMetadata, Map<string, CachedEntity<any>>> = new Map()
     private logger: Logger
 
-    constructor(private em: () => EntityManager, private opts: {logger: Logger}) {
+    constructor(private opts: {logger: Logger}) {
         this.logger = this.opts.logger.child('cache')
     }
 
-    exist<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
-        const metadata = this.getEntityMetadata(entityClass)
+    exist(metadata: EntityMetadata, id: string) {
         const cacheMap = this.getEntityCache(metadata)
         const cachedEntity = cacheMap.get(id)
         return !!cachedEntity?.value
     }
 
-    get<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
-        const metadata = this.getEntityMetadata(entityClass)
+    get<E extends Entity>(metadata: EntityMetadata, id: string) {
         const cacheMap = this.getEntityCache(metadata)
         return cacheMap.get(id) as CachedEntity<E> | undefined
     }
 
-    ensure<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
-        const metadata = this.getEntityMetadata(entityClass)
+    ensure(metadata: EntityMetadata, id: string) {
         const cacheMap = this.getEntityCache(metadata)
 
         if (cacheMap.has(id)) return
@@ -42,8 +39,7 @@ export class CacheMap {
         this.logger.debug(`added empty entity ${metadata.name} ${id}`)
     }
 
-    delete<E extends Entity>(entityClass: EntityTarget<E>, id: string) {
-        const metadata = this.getEntityMetadata(entityClass)
+    delete(metadata: EntityMetadata, id: string) {
         const cacheMap = this.getEntityCache(metadata)
         cacheMap.set(id, new CachedEntity())
         this.logger.debug(`deleted entity ${metadata.name} ${id}`)
@@ -59,17 +55,11 @@ export class CacheMap {
         this.map.clear()
     }
 
-    add<E extends Entity>(e: E | E[], isNew?: boolean) {
-        const entities = Array.isArray(e) ? e : [e]
-        if (entities.length === 0) return
-
-        for (const entity of entities) {
-            this.cacheEntity(entity, isNew)
-        }
+    add<E extends Entity>(metadata: EntityMetadata, entity: E, isNew?: boolean) {
+        this.cacheEntity(metadata, entity, isNew)
     }
 
-    private cacheEntity(entity: Entity, isNew = false) {
-        const metadata = this.getEntityMetadata(entity.constructor)
+    private cacheEntity(metadata: EntityMetadata, entity: Entity, isNew = false) {
         const cacheMap = this.getEntityCache(metadata)
 
         let cached = cacheMap.get(entity.id)
@@ -123,10 +113,5 @@ export class CacheMap {
         }
 
         return map
-    }
-
-    private getEntityMetadata(entityClass: EntityTarget<any>) {
-        const em = this.em()
-        return em.connection.getMetadata(entityClass)
     }
 }
