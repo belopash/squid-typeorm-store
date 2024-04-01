@@ -1,7 +1,7 @@
 import {createLogger, Logger} from '@subsquid/logger'
 import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions, Store} from '@subsquid/typeorm-store'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
-import {AsyncQueue, def} from '@subsquid/util-internal'
+import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
@@ -10,6 +10,7 @@ import {UpdatesMap, UpdateType} from './updatesMap'
 import {DeferList} from './deferList'
 import {getCommitOrder} from './relationGraph'
 import {copy, splitIntoBatches} from './utils'
+import {Mutex} from 'async-mutex'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
@@ -33,6 +34,7 @@ export class StoreWithCache extends Store {
     private cache: CacheMap
     private logger: Logger
 
+    private currentCommit = new Mutex()
 
     constructor(private em: () => EntityManager, changes?: ChangeTracker) {
         super(em, changes)
@@ -45,6 +47,8 @@ export class StoreWithCache extends Store {
     async insert<E extends _Entity>(entity: E): Promise<void>
     async insert<E extends _Entity>(entities: E[]): Promise<void>
     async insert<E extends _Entity>(e: E | E[]): Promise<void> {
+        await this.currentCommit.waitForUnlock()
+
         const entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
@@ -59,6 +63,8 @@ export class StoreWithCache extends Store {
     async upsert<E extends _Entity>(entity: E): Promise<void>
     async upsert<E extends _Entity>(entities: E[]): Promise<void>
     async upsert<E extends _Entity>(e: E | E[]): Promise<void> {
+        await this.currentCommit.waitForUnlock()
+
         let entities = Array.isArray(e) ? e : [e]
         if (entities.length == 0) return
 
@@ -80,6 +86,8 @@ export class StoreWithCache extends Store {
     async remove<E extends Entity>(entities: E[]): Promise<void>
     async remove<E extends Entity>(entityClass: EntityTarget<E>, id: string | string[]): Promise<void>
     async remove<E extends Entity>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
+        await this.currentCommit.waitForUnlock()
+
         if (id == null) {
             const entities = Array.isArray(e) ? e : [e as E]
             if (entities.length == 0) return
@@ -282,44 +290,46 @@ export class StoreWithCache extends Store {
     }
 
     async commit(): Promise<void> {
-        const log = this.logger.child('commit')
+        await this.currentCommit.runExclusive(async () => {
+            const log = this.logger.child('commit')
 
-        const entityOrder = this.getCommitOrder()
+            const entityOrder = this.getCommitOrder()
 
-        const changeSets: ChangeSet<any>[] = []
-        for (const metadata of entityOrder) {
-            const changeSet = this.getChangeSet(metadata.target)
-            changeSets.push(changeSet)
-        }
-
-        for (const {metadata, inserts, upserts} of changeSets) {
-            if (upserts.length > 0) {
-                log.debug(`commit upserts for ${metadata.name} (${upserts.length})`)
-                await super.upsert(upserts)
+            const changeSets: ChangeSet<any>[] = []
+            for (const metadata of entityOrder) {
+                const changeSet = this.getChangeSet(metadata.target)
+                changeSets.push(changeSet)
             }
 
-            if (inserts.length) {
-                log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
-                await super.insert(inserts)
-            }
-        }
+            for (const {metadata, inserts, upserts} of changeSets) {
+                if (upserts.length > 0) {
+                    log.debug(`commit upserts for ${metadata.name} (${upserts.length})`)
+                    await super.upsert(upserts)
+                }
 
-        const changeSetsReversed = [...changeSets].reverse()
-        for (const {metadata, removes} of changeSetsReversed) {
-            if (removes.length > 0) {
-                log.debug(`commit removes for ${metadata.name} (${removes.length})`)
-                await super.remove(removes)
+                if (inserts.length) {
+                    log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
+                    await super.insert(inserts)
+                }
             }
-        }
 
-        for (const {metadata, extraUpserts} of changeSets) {
-            if (extraUpserts.length) {
-                log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
-                await super.upsert(extraUpserts)
+            const changeSetsReversed = [...changeSets].reverse()
+            for (const {metadata, removes} of changeSetsReversed) {
+                if (removes.length > 0) {
+                    log.debug(`commit removes for ${metadata.name} (${removes.length})`)
+                    await super.remove(removes)
+                }
             }
-        }
 
-        this.updates.clear()
+            for (const {metadata, extraUpserts} of changeSets) {
+                if (extraUpserts.length) {
+                    log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
+                    await super.upsert(extraUpserts)
+                }
+            }
+
+            this.updates.clear()
+        })
     }
 
     clear(): void {
