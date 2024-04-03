@@ -3,14 +3,22 @@ import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions,
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {def} from '@subsquid/util-internal'
 import assert from 'assert'
-import {EntityManager, EntityMetadata, EntityTarget, FindOptionsRelations, FindOptionsWhere, In} from 'typeorm'
+import {Mutex} from 'async-mutex'
+import {
+    EntityManager,
+    EntityMetadata,
+    EntityTarget,
+    FindOptionsRelations,
+    FindOptionsWhere,
+    In,
+    ObjectLiteral,
+} from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import {CachedEntity, CacheMap} from './cacheMap'
-import {UpdatesMap, UpdateType} from './updatesMap'
 import {DeferList} from './deferList'
 import {getCommitOrder} from './relationGraph'
+import {UpdatesMap, UpdateType} from './updatesMap'
 import {copy, splitIntoBatches} from './utils'
-import {Mutex} from 'async-mutex'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
@@ -18,7 +26,7 @@ export type ChangeSet<E extends Entity> = {
     metadata: EntityMetadata
     inserts: E[]
     upserts: E[]
-    removes: E[]
+    removes: string[]
     extraUpserts: E[]
 }
 
@@ -71,8 +79,10 @@ export class StoreWithCache extends Store {
         for (const entity of entities) {
             const md = this.getEntityMetadata(entity.constructor)
 
+            const isNew = this.updates.get(md, entity.id) === UpdateType.Remove
+
             this.updates.upsert(md, entity.id)
-            this.cache.add(md, entity)
+            this.cache.add(md, entity, isNew)
         }
     }
 
@@ -317,7 +327,7 @@ export class StoreWithCache extends Store {
             for (const {metadata, removes} of changeSetsReversed) {
                 if (removes.length > 0) {
                     log.debug(`commit removes for ${metadata.name} (${removes.length})`)
-                    await super.remove(removes)
+                    await super.remove(metadata.target as any, removes)
                 }
             }
 
@@ -346,7 +356,7 @@ export class StoreWithCache extends Store {
 
         const inserts: E[] = []
         const upserts: E[] = []
-        const removes: E[] = []
+        const removes: string[] = []
         const extraUpserts: E[] = []
 
         const updates = this.updates.getUpdates(metadata)
@@ -379,9 +389,7 @@ export class StoreWithCache extends Store {
                     break
                 }
                 case UpdateType.Remove: {
-                    const e = metadata.create() as E
-                    e.id = id
-                    removes.push(e)
+                    removes.push(id)
                     break
                 }
             }
@@ -394,11 +402,12 @@ export class StoreWithCache extends Store {
         for (const {target, data} of this.defers.values()) {
             const metadata = this.getEntityMetadata(target)
 
-            for (const id of data.ids) {
+            const ids = Array.from(data.ids)
+            for (const id of ids) {
                 this.cache.ensure(metadata, id)
             }
 
-            for (let batch of splitIntoBatches([...data.ids], 30000)) {
+            for (let batch of splitIntoBatches(ids, 30000)) {
                 if (batch.length == 0) continue
                 await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
             }
@@ -539,6 +548,24 @@ export class StoreWithCache extends Store {
     private getEntityMetadata(entityClass: EntityTarget<any>) {
         const em = this.em()
         return em.connection.getMetadata(entityClass)
+    }
+
+    private getEntityPkHash(metadata: EntityMetadata, entity: ObjectLiteral) {
+        const columns = metadata.primaryColumns
+
+        if (columns.length === 1) {
+            const pk = columns[0].getEntityValue(entity)
+            assert(pk != null)
+            return String(pk)
+        } else {
+            return columns
+                .map((c) => {
+                    const pk = c.getEntityValue(entity)
+                    assert(pk != null)
+                    return String(pk)
+                })
+                .join(':')
+        }
     }
 
     // @ts-ignore
