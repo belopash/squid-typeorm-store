@@ -1,6 +1,6 @@
 import {Entity} from '@subsquid/typeorm-store'
 import {EntityMetadata, EntityTarget, FindOptionsRelations} from 'typeorm'
-import {mergeRelataions} from './utils'
+import {mergeRelataions} from './misc'
 
 export type DeferData = {
     ids: Set<string>
@@ -8,7 +8,7 @@ export type DeferData = {
 }
 
 export class DeferList {
-    private deferMap: Map<EntityTarget<any>, DeferData> = new Map()
+    private deferMap: Map<EntityMetadata, DeferData> = new Map()
 
     constructor() {}
 
@@ -22,17 +22,17 @@ export class DeferList {
     }
 
     getData(metadata: EntityMetadata) {
-        let list = this.deferMap.get(metadata.target)
+        let list = this.deferMap.get(metadata)
         if (list == null) {
             list = {ids: new Set(), relations: {}}
-            this.deferMap.set(metadata.target, list)
+            this.deferMap.set(metadata, list)
         }
 
         return list
     }
 
     values() {
-        return [...this.deferMap.entries()].map(([target, data]) => ({target, data}))
+        return [...this.deferMap.entries()]
     }
 
     clear() {

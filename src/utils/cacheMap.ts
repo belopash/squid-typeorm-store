@@ -1,6 +1,6 @@
 import {Entity} from '@subsquid/typeorm-store'
 import {EntityMetadata} from 'typeorm'
-import {copy} from './utils'
+import {copy} from './misc'
 import {Logger} from '@subsquid/logger'
 
 export class CachedEntity<E extends Entity> {

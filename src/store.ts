@@ -14,11 +14,11 @@ import {
     ObjectLiteral,
 } from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
-import {CachedEntity, CacheMap} from './cacheMap'
-import {DeferList} from './deferList'
-import {getCommitOrder} from './relationGraph'
-import {UpdatesMap, UpdateType} from './updatesMap'
-import {copy, splitIntoBatches} from './utils'
+import {CachedEntity, CacheMap} from './utils/cacheMap'
+import {DeferList} from './utils/deferList'
+import {getCommitOrder} from './utils/relationGraph'
+import {UpdateMap, UpdateType} from './utils/updateMap'
+import {copy, splitIntoBatches} from './utils/misc'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
@@ -37,7 +37,7 @@ export interface GetOptions<Entity = any> {
 
 // @ts-ignore
 export class StoreWithCache extends Store {
-    private updates: UpdatesMap
+    private updates: UpdateMap
     private defers: DeferList
     private cache: CacheMap
     private logger: Logger

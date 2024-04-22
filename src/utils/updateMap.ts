@@ -11,7 +11,7 @@ export interface Update {
     type: UpdateType
 }
 
-export class UpdatesMap {
+export class UpdateMap {
     private map: Map<EntityMetadata, Map<string, UpdateType>> = new Map()
 
     constructor() {}
