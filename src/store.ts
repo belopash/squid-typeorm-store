@@ -22,7 +22,11 @@ import {copy, splitIntoBatches} from './utils/misc'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
-export type ChangeSet<E extends Entity> = {
+export type EntityType = {
+    id: string
+}
+
+export type ChangeSet<E extends EntityType> = {
     metadata: EntityMetadata
     inserts: E[]
     upserts: E[]
@@ -53,9 +57,9 @@ export class StoreWithCache extends Store {
         this.defers = new DeferList()
     }
 
-    async insert<E extends _Entity>(entity: E): Promise<void>
-    async insert<E extends _Entity>(entities: E[]): Promise<void>
-    async insert<E extends _Entity>(e: E | E[]): Promise<void> {
+    async insert<E extends EntityType>(entity: E): Promise<void>
+    async insert<E extends EntityType>(entities: E[]): Promise<void>
+    async insert<E extends EntityType>(e: E | E[]): Promise<void> {
         await this.currentCommit.waitForUnlock()
 
         const entities = Array.isArray(e) ? e : [e]
@@ -69,9 +73,9 @@ export class StoreWithCache extends Store {
         }
     }
 
-    async upsert<E extends _Entity>(entity: E): Promise<void>
-    async upsert<E extends _Entity>(entities: E[]): Promise<void>
-    async upsert<E extends _Entity>(e: E | E[]): Promise<void> {
+    async upsert<E extends EntityType>(entity: E): Promise<void>
+    async upsert<E extends EntityType>(entities: E[]): Promise<void>
+    async upsert<E extends EntityType>(e: E | E[]): Promise<void> {
         await this.currentCommit.waitForUnlock()
 
         let entities = Array.isArray(e) ? e : [e]
@@ -87,16 +91,16 @@ export class StoreWithCache extends Store {
         }
     }
 
-    async save<E extends _Entity>(entity: E): Promise<void>
-    async save<E extends _Entity>(entities: E[]): Promise<void>
-    async save<E extends _Entity>(e: E | E[]): Promise<void> {
+    async save<E extends EntityType>(entity: E): Promise<void>
+    async save<E extends EntityType>(entities: E[]): Promise<void>
+    async save<E extends EntityType>(e: E | E[]): Promise<void> {
         return await this.upsert(e as any)
     }
 
-    async remove<E extends Entity>(entity: E): Promise<void>
-    async remove<E extends Entity>(entities: E[]): Promise<void>
-    async remove<E extends Entity>(entityClass: EntityTarget<E>, id: string | string[]): Promise<void>
-    async remove<E extends Entity>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
+    async remove<E extends EntityType>(entity: E): Promise<void>
+    async remove<E extends EntityType>(entities: E[]): Promise<void>
+    async remove<E extends EntityType>(entityClass: EntityTarget<E>, id: string | string[]): Promise<void>
+    async remove<E extends EntityType>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
         await this.currentCommit.waitForUnlock()
 
         if (id == null) {
@@ -121,12 +125,12 @@ export class StoreWithCache extends Store {
         }
     }
 
-    async count<E extends Entity>(entityClass: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
+    async count<E extends EntityType>(entityClass: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
         await this.commit()
         return await super.count(entityClass as EntityClass<E>, options)
     }
 
-    async countBy<E extends Entity>(
+    async countBy<E extends EntityType>(
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<number> {
@@ -134,7 +138,7 @@ export class StoreWithCache extends Store {
         return await super.countBy(entityClass as EntityClass<E>, where)
     }
 
-    async find<E extends Entity>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
+    async find<E extends EntityType>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
         await this.commit()
         const res = await super.find(entityClass as EntityClass<E>, options)
         for (const entity of res) {
@@ -146,7 +150,7 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async findBy<E extends Entity>(
+    async findBy<E extends EntityType>(
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E[]> {
@@ -163,7 +167,10 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async findOne<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E | undefined> {
+    async findOne<E extends EntityType>(
+        entityClass: EntityTarget<E>,
+        options: FindOneOptions<E>
+    ): Promise<E | undefined> {
         await this.commit()
         const res = await super.findOne(entityClass as EntityClass<E>, options)
 
@@ -177,7 +184,7 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async findOneOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
+    async findOneOrFail<E extends EntityType>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
         await this.commit()
         const res = await super.findOneOrFail(entityClass as EntityClass<E>, options)
         this.traverseEntity(res, options.relations || null, (e) => {
@@ -187,7 +194,7 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async findOneBy<E extends Entity>(
+    async findOneBy<E extends EntityType>(
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E | undefined> {
@@ -202,7 +209,7 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async findOneByOrFail<E extends Entity>(
+    async findOneByOrFail<E extends EntityType>(
         entityClass: EntityTarget<E>,
         where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
     ): Promise<E> {
@@ -215,9 +222,9 @@ export class StoreWithCache extends Store {
         return res
     }
 
-    async get<E extends Entity>(entityClass: EntityTarget<E>, id: string): Promise<E | undefined>
-    async get<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E | undefined>
-    async get<E extends Entity>(
+    async get<E extends EntityType>(entityClass: EntityTarget<E>, id: string): Promise<E | undefined>
+    async get<E extends EntityType>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E | undefined>
+    async get<E extends EntityType>(
         entityClass: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>
     ): Promise<E | undefined> {
@@ -234,9 +241,12 @@ export class StoreWithCache extends Store {
         return await this.findOne(entityClass, {where: {id} as any, relations: options.relations})
     }
 
-    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, id: string): Promise<E>
-    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E>
-    async getOrFail<E extends Entity>(entityClass: EntityTarget<E>, idOrOptions: string | GetOptions<E>): Promise<E> {
+    async getOrFail<E extends EntityType>(entityClass: EntityTarget<E>, id: string): Promise<E>
+    async getOrFail<E extends EntityType>(entityClass: EntityTarget<E>, options: GetOptions<E>): Promise<E>
+    async getOrFail<E extends EntityType>(
+        entityClass: EntityTarget<E>,
+        idOrOptions: string | GetOptions<E>
+    ): Promise<E> {
         const options = parseGetOptions(idOrOptions)
         let e = await this.get(entityClass, options)
 
@@ -248,17 +258,17 @@ export class StoreWithCache extends Store {
         return e
     }
 
-    async getOrInsert<E extends Entity>(
+    async getOrInsert<E extends EntityType>(
         entityClass: EntityTarget<E>,
         id: string,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrInsert<E extends Entity>(
+    async getOrInsert<E extends EntityType>(
         entityClass: EntityTarget<E>,
         options: GetOptions<E>,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrInsert<E extends Entity>(
+    async getOrInsert<E extends EntityType>(
         entityClass: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>,
         create: (id: string) => E | Promise<E>
@@ -277,7 +287,7 @@ export class StoreWithCache extends Store {
     /**
      * @deprecated use {@link getOrInsert} instead
      */
-    async getOrCreate<E extends Entity>(
+    async getOrCreate<E extends EntityType>(
         entityClass: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>,
         create: (id: string) => E | Promise<E>
@@ -285,9 +295,9 @@ export class StoreWithCache extends Store {
         return this.getOrInsert(entityClass, idOrOptions as any, create)
     }
 
-    defer<E extends Entity>(entityClass: EntityTarget<E>, id: string): DeferredEntity<E>
-    defer<E extends Entity>(entityClass: EntityTarget<E>, options: GetOptions<E>): DeferredEntity<E>
-    defer<E extends Entity>(entityClass: EntityTarget<E>, idOrOptions: string | GetOptions<E>): DeferredEntity<E> {
+    defer<E extends EntityType>(entityClass: EntityTarget<E>, id: string): DeferredEntity<E>
+    defer<E extends EntityType>(entityClass: EntityTarget<E>, options: GetOptions<E>): DeferredEntity<E>
+    defer<E extends EntityType>(entityClass: EntityTarget<E>, idOrOptions: string | GetOptions<E>): DeferredEntity<E> {
         const md = this.getEntityMetadata(entityClass)
 
         const options = parseGetOptions(idOrOptions)
@@ -359,7 +369,7 @@ export class StoreWithCache extends Store {
         return changeSets
     }
 
-    private getChangeSet<E extends Entity>(target: EntityTarget<E>): ChangeSet<E> {
+    private getChangeSet<E extends EntityType>(target: EntityTarget<E>): ChangeSet<E> {
         const metadata = this.getEntityMetadata(target)
 
         const inserts: E[] = []
@@ -425,7 +435,11 @@ export class StoreWithCache extends Store {
         })
     }
 
-    private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask?: FindOptionsRelations<any>) {
+    private getCached<E extends EntityType>(
+        entityClass: EntityTarget<E>,
+        id: string,
+        mask?: FindOptionsRelations<any>
+    ): E | null | undefined {
         const md = this.getEntityMetadata(entityClass)
         const cached = this.cache.get<E>(md, id)
 
@@ -438,7 +452,7 @@ export class StoreWithCache extends Store {
         }
     }
 
-    private extractExtraUpsert<E extends Entity>(entity: E) {
+    private extractExtraUpsert<E extends EntityType>(entity: E) {
         const metadata = this.getEntityMetadata(entity.constructor)
 
         const commitOrderIndex = this.getCommitOrderIndex(metadata)
@@ -492,7 +506,7 @@ export class StoreWithCache extends Store {
         return index
     }
 
-    private cloneEntity<E extends Entity>(entity: E, mask: FindOptionsRelations<any> | null): E | undefined {
+    private cloneEntity<E extends EntityType>(entity: E, mask: FindOptionsRelations<any> | null): E | undefined {
         const metadata = this.getEntityMetadata(entity.constructor)
 
         const clonedEntity = metadata.create()
@@ -531,7 +545,11 @@ export class StoreWithCache extends Store {
         return clonedEntity
     }
 
-    private traverseEntity(entity: Entity, mask: FindOptionsRelations<any> | null, fn: (e: Entity) => void) {
+    private traverseEntity(
+        entity: ObjectLiteral,
+        mask: FindOptionsRelations<any> | null,
+        fn: (e: ObjectLiteral) => void
+    ) {
         const metadata = this.getEntityMetadata(entity.constructor)
 
         if (mask != null) {
@@ -614,7 +632,7 @@ export class StoreWithCache extends Store {
     }
 }
 
-export class DeferredEntity<E extends Entity> {
+export class DeferredEntity<E extends EntityType> {
     constructor(
         private opts: {
             get: () => Promise<E | undefined>

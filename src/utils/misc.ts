@@ -1,5 +1,4 @@
-import {Entity} from '@subsquid/typeorm-store'
-import {FindOptionsRelations} from 'typeorm'
+import {FindOptionsRelations, ObjectLiteral} from 'typeorm'
 
 export function* splitIntoBatches<T>(list: T[], maxBatchSize: number): Generator<T[]> {
     if (list.length <= maxBatchSize) {
@@ -61,7 +60,7 @@ function copyBuffer(buf: any) {
     }
 }
 
-export function mergeRelataions<E extends Entity>(
+export function mergeRelataions<E extends ObjectLiteral>(
     a: FindOptionsRelations<E>,
     b: FindOptionsRelations<E>
 ): FindOptionsRelations<E> {

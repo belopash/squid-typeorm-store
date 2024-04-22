@@ -1,9 +1,8 @@
-import {Entity} from '@subsquid/typeorm-store'
-import {EntityMetadata} from 'typeorm'
+import {EntityMetadata, ObjectLiteral} from 'typeorm'
 import {copy} from './misc'
 import {Logger} from '@subsquid/logger'
 
-export class CachedEntity<E extends Entity> {
+export class CachedEntity<E extends ObjectLiteral> {
     value: E | null
 
     constructor() {
@@ -25,7 +24,7 @@ export class CacheMap {
         return !!cachedEntity?.value
     }
 
-    get<E extends Entity>(metadata: EntityMetadata, id: string) {
+    get<E extends ObjectLiteral>(metadata: EntityMetadata, id: string) {
         const cacheMap = this.getEntityCache(metadata)
         return cacheMap.get(id) as CachedEntity<E> | undefined
     }
@@ -55,11 +54,11 @@ export class CacheMap {
         this.map.clear()
     }
 
-    add<E extends Entity>(metadata: EntityMetadata, entity: E, isNew?: boolean) {
+    add<E extends ObjectLiteral>(metadata: EntityMetadata, entity: E, isNew?: boolean) {
         this.cacheEntity(metadata, entity, isNew)
     }
 
-    private cacheEntity(metadata: EntityMetadata, entity: Entity, isNew = false) {
+    private cacheEntity(metadata: EntityMetadata, entity: ObjectLiteral, isNew = false) {
         const cacheMap = this.getEntityCache(metadata)
 
         let cached = cacheMap.get(entity.id)

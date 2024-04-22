@@ -1,5 +1,4 @@
-import {Entity} from '@subsquid/typeorm-store'
-import {EntityMetadata, EntityTarget, FindOptionsRelations} from 'typeorm'
+import {EntityMetadata, FindOptionsRelations, ObjectLiteral} from 'typeorm'
 import {mergeRelataions} from './misc'
 
 export type DeferData = {
@@ -12,7 +11,7 @@ export class DeferList {
 
     constructor() {}
 
-    add<E extends Entity>(metadata: EntityMetadata, id: string, relations?: FindOptionsRelations<E>) {
+    add<E extends ObjectLiteral>(metadata: EntityMetadata, id: string, relations?: FindOptionsRelations<E>) {
         const data = this.getData(metadata)
         data.ids.add(id)
 
