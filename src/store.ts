@@ -17,7 +17,7 @@ import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import {CachedEntity, CacheMap} from './utils/cacheMap'
 import {DeferList} from './utils/deferList'
 import {getCommitOrder} from './utils/relationGraph'
-import {UpdateMap, UpdateType} from './utils/updateMap'
+import {ChangeMap, ChangeType} from './utils/changeMap'
 import {copy, splitIntoBatches} from './utils/misc'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
@@ -41,7 +41,7 @@ export interface GetOptions<Entity = any> {
 
 // @ts-ignore
 export class StoreWithCache extends Store {
-    private updates: UpdateMap
+    private updates: ChangeMap
     private defers: DeferList
     private cache: CacheMap
     private logger: Logger
@@ -49,12 +49,12 @@ export class StoreWithCache extends Store {
     private currentCommit = new Mutex()
     private currentLoad = new Mutex()
 
-    constructor(private em: () => EntityManager, changes?: ChangeTracker) {
+    constructor(private em: () => EntityManager, {changes}: {changes?: ChangeTracker}) {
         super(em, changes)
         this.logger = createLogger('sqd:store')
         this.cache = new CacheMap({logger: this.logger})
-        this.updates = new UpdateMap()
-        this.defers = new DeferList()
+        this.updates = new ChangeMap({logger: this.logger})
+        this.defers = new DeferList({logger: this.logger})
     }
 
     async insert<E extends EntityType>(entity: E): Promise<void>
@@ -84,7 +84,7 @@ export class StoreWithCache extends Store {
         for (const entity of entities) {
             const md = this.getEntityMetadata(entity.constructor)
 
-            const isNew = this.updates.get(md, entity.id) === UpdateType.Remove
+            const isNew = this.updates.get(md, entity.id) === ChangeType.Remove
 
             this.updates.upsert(md, entity.id)
             this.cache.add(md, entity, isNew)
@@ -382,7 +382,7 @@ export class StoreWithCache extends Store {
             const cached = this.cache.get(metadata, id) as CachedEntity<E>
 
             switch (type) {
-                case UpdateType.Insert: {
+                case ChangeType.Insert: {
                     assert(cached?.value != null, `unable to insert entity ${metadata.name} ${id}`)
 
                     inserts.push(cached.value)
@@ -394,7 +394,7 @@ export class StoreWithCache extends Store {
 
                     break
                 }
-                case UpdateType.Upsert: {
+                case ChangeType.Upsert: {
                     assert(cached?.value != null, `unable to upsert entity ${metadata.name} ${id}`)
 
                     upserts.push(cached.value)
@@ -406,7 +406,7 @@ export class StoreWithCache extends Store {
 
                     break
                 }
-                case UpdateType.Remove: {
+                case ChangeType.Remove: {
                     removes.push(id)
                     break
                 }
@@ -473,7 +473,7 @@ export class StoreWithCache extends Store {
             assert(relation.isNullable)
 
             const invUpdateType = this.updates.get(inverseMetadata, inverseEntity.id)
-            if (invUpdateType === UpdateType.Insert) {
+            if (invUpdateType === ChangeType.Insert) {
                 if (extraUpsert == null) {
                     extraUpsert = metadata.create() as E
                     extraUpsert.id = entity.id
