@@ -46,10 +46,10 @@ export class CacheMap {
     }
 
     clear() {
-        for (const [name, item] of this.map) {
+        for (const [metadata, item] of this.map) {
             if (item.size > 0) {
                 item.clear()
-                this.logger.debug(`cleared cache for ${name} (${item.size})`)
+                this.logger.debug(`cleared cache for ${metadata.name} (${item.size})`)
             }
         }
         this.map.clear()

@@ -43,12 +43,13 @@ export class StoreWithCache extends Store {
     private logger: Logger
 
     private currentCommit = new Mutex()
+    private currentLoad = new Mutex()
 
     constructor(private em: () => EntityManager, changes?: ChangeTracker) {
         super(em, changes)
         this.logger = createLogger('sqd:store')
         this.cache = new CacheMap({logger: this.logger})
-        this.updates = new UpdatesMap()
+        this.updates = new UpdateMap()
         this.defers = new DeferList()
     }
 
@@ -303,13 +304,7 @@ export class StoreWithCache extends Store {
         await this.currentCommit.runExclusive(async () => {
             const log = this.logger.child('commit')
 
-            const entityOrder = this.getCommitOrder()
-
-            const changeSets: ChangeSet<any>[] = []
-            for (const metadata of entityOrder) {
-                const changeSet = this.getChangeSet(metadata.target)
-                changeSets.push(changeSet)
-            }
+            const changeSets = this.computeChangeSets()
 
             for (const {metadata, inserts, upserts} of changeSets) {
                 if (upserts.length > 0) {
@@ -317,7 +312,7 @@ export class StoreWithCache extends Store {
                     await super.upsert(upserts)
                 }
 
-                if (inserts.length) {
+                if (inserts.length > 0) {
                     log.debug(`commit inserts for ${metadata.name} (${inserts.length})`)
                     await super.insert(inserts)
                 }
@@ -332,23 +327,36 @@ export class StoreWithCache extends Store {
             }
 
             for (const {metadata, extraUpserts} of changeSets) {
-                if (extraUpserts.length) {
+                if (extraUpserts.length > 0) {
                     log.debug(`commit extra upserts for ${metadata.name} (${extraUpserts.length})`)
                     await super.upsert(extraUpserts)
                 }
             }
-
-            this.updates.clear()
         })
     }
 
     clear(): void {
         this.cache.clear()
+        this.updates.clear()
     }
 
     async flush(): Promise<void> {
         await this.commit()
         this.clear()
+    }
+
+    private computeChangeSets() {
+        const entityOrder = this.getCommitOrder()
+
+        const changeSets: ChangeSet<any>[] = []
+        for (const metadata of entityOrder) {
+            const changeSet = this.getChangeSet(metadata.target)
+            changeSets.push(changeSet)
+        }
+
+        this.updates.clear()
+
+        return changeSets
     }
 
     private getChangeSet<E extends Entity>(target: EntityTarget<E>): ChangeSet<E> {
@@ -365,7 +373,7 @@ export class StoreWithCache extends Store {
 
             switch (type) {
                 case UpdateType.Insert: {
-                    assert(cached?.value != null)
+                    assert(cached?.value != null, `unable to insert entity ${metadata.name} ${id}`)
 
                     inserts.push(cached.value)
 
@@ -377,7 +385,7 @@ export class StoreWithCache extends Store {
                     break
                 }
                 case UpdateType.Upsert: {
-                    assert(cached?.value != null)
+                    assert(cached?.value != null, `unable to upsert entity ${metadata.name} ${id}`)
 
                     upserts.push(cached.value)
 
@@ -399,21 +407,22 @@ export class StoreWithCache extends Store {
     }
 
     private async load(): Promise<void> {
-        for (const {target, data} of this.defers.values()) {
-            const metadata = this.getEntityMetadata(target)
+        await this.currentLoad.runExclusive(async () => {
+            for (const [metadata, data] of this.defers.values()) {
+                const ids = Array.from(data.ids)
 
-            const ids = Array.from(data.ids)
-            for (const id of ids) {
-                this.cache.ensure(metadata, id)
+                for (let batch of splitIntoBatches(ids, 30000)) {
+                    if (batch.length == 0) continue
+                    await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
+                }
+
+                for (const id of ids) {
+                    this.cache.ensure(metadata, id)
+                }
             }
 
-            for (let batch of splitIntoBatches(ids, 30000)) {
-                if (batch.length == 0) continue
-                await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
-            }
-        }
-
-        this.defers.clear()
+            this.defers.clear()
+        })
     }
 
     private getCached<E extends Entity>(entityClass: EntityTarget<E>, id: string, mask?: FindOptionsRelations<any>) {
