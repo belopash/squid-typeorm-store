@@ -2,8 +2,10 @@ import {IsolationLevel, TypeormDatabase, TypeormDatabaseOptions} from '@subsquid
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {FinalTxInfo, HotTxInfo, HashAndHeight} from '@subsquid/typeorm-store/lib/interfaces'
 import assert from 'assert'
-import {EntityManager} from 'typeorm'
+import {EntityManager, EntityMetadata} from 'typeorm'
 import {StoreWithCache} from './store'
+import {def} from '@subsquid/util-internal'
+import {getCommitOrder} from './utils/relationGraph'
 
 export {IsolationLevel, TypeormDatabaseOptions}
 
@@ -20,21 +22,30 @@ export class TypeormDatabaseWithCache extends TypeormDatabase {
     }
 
     // @ts-ignore
-    transactHot2(info: HotTxInfo, cb: (store: StoreWithCache, sliceBeg: number, sliceEnd: number) => Promise<void>): Promise<void> {
+    transactHot2(
+        info: HotTxInfo,
+        cb: (store: StoreWithCache, sliceBeg: number, sliceEnd: number) => Promise<void>
+    ): Promise<void> {
         return super.transactHot2(info, cb as any)
     }
 
     private async performUpdates(
         cb: (store: StoreWithCache) => Promise<void>,
         em: EntityManager,
-        changeTracker?: ChangeTracker
+        changes?: ChangeTracker
     ): Promise<void> {
         let running = true
 
-        let store = new StoreWithCache(() => {
-            assert(running, `too late to perform db updates, make sure you haven't forgot to await on db query`)
-            return em
-        }, changeTracker)
+        let store = new StoreWithCache(
+            () => {
+                assert(running, `too late to perform db updates, make sure you haven't forgot to await on db query`)
+                return em
+            },
+            {
+                changeTracker: changes,
+                commitOrder: this.getCommitOrder(),
+            }
+        )
 
         try {
             await cb(store)
@@ -42,5 +53,10 @@ export class TypeormDatabaseWithCache extends TypeormDatabase {
         } finally {
             running = false
         }
+    }
+
+    @def
+    private getCommitOrder() {
+        return getCommitOrder(this['con'].entityMetadatas)
     }
 }

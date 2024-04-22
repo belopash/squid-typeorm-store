@@ -4,10 +4,14 @@ import {Equal} from 'typeorm'
 import {StoreWithCache} from '../store'
 import {Item, Order} from './lib/model'
 import {getEntityManager, useDatabase} from './util'
+import {getCommitOrder} from '../utils/relationGraph'
 
 describe('Store', function () {
     describe('.save()', function () {
-        useDatabase([`CREATE TABLE item (id text primary key , name text)`, `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`])
+        useDatabase([
+            `CREATE TABLE item (id text primary key , name text)`,
+            `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`,
+        ])
 
         it('get single entity', async function () {
             let store = await createStore()
@@ -160,8 +164,9 @@ describe('Store', function () {
     })
 })
 
-export function createStore(): Promise<StoreWithCache> {
-    return getEntityManager().then((em) => new StoreWithCache(() => em))
+export async function createStore(): Promise<StoreWithCache> {
+    const em = await getEntityManager()
+    return new StoreWithCache(() => em, {commitOrder: getCommitOrder(em.connection.entityMetadatas)})
 }
 
 export async function getItems(store: StoreWithCache): Promise<Item[]> {

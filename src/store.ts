@@ -41,6 +41,7 @@ export interface GetOptions<Entity = any> {
 
 // @ts-ignore
 export class StoreWithCache extends Store {
+    private commitOrder: EntityMetadata[]
     private updates: ChangeMap
     private defers: DeferList
     private cache: CacheMap
@@ -49,8 +50,9 @@ export class StoreWithCache extends Store {
     private currentCommit = new Mutex()
     private currentLoad = new Mutex()
 
-    constructor(private em: () => EntityManager, {changes}: {changes?: ChangeTracker}) {
-        super(em, changes)
+    constructor(private em: () => EntityManager, opts: {changeTracker?: ChangeTracker; commitOrder: EntityMetadata[]}) {
+        super(em, opts.changeTracker)
+        this.commitOrder = opts.commitOrder
         this.logger = createLogger('sqd:store')
         this.cache = new CacheMap({logger: this.logger})
         this.updates = new ChangeMap({logger: this.logger})
@@ -356,10 +358,8 @@ export class StoreWithCache extends Store {
     }
 
     private computeChangeSets() {
-        const entityOrder = this.getCommitOrder()
-
         const changeSets: ChangeSet<any>[] = []
-        for (const metadata of entityOrder) {
+        for (const metadata of this.commitOrder) {
             const changeSet = this.getChangeSet(metadata.target)
             changeSets.push(changeSet)
         }
@@ -487,17 +487,10 @@ export class StoreWithCache extends Store {
         return extraUpsert
     }
 
-    @def
-    private getCommitOrder() {
-        const em = this.em()
-        return getCommitOrder(em.connection.entityMetadatas)
-    }
-
     private commitOrderIndexes: Map<EntityMetadata, number> | undefined
     private getCommitOrderIndex(metadata: EntityMetadata) {
         if (this.commitOrderIndexes == null) {
-            const order = this.getCommitOrder()
-            this.commitOrderIndexes = new Map(order.map((m, i) => [m, i]))
+            this.commitOrderIndexes = new Map(this.commitOrder.map((m, i) => [m, i]))
         }
 
         const index = this.commitOrderIndexes.get(metadata)
