@@ -8,7 +8,7 @@ export type DeferData = {
 }
 
 export class DeferList {
-    private deferMap: Map<EntityMetadata, DeferData> = new Map()
+    private map: Map<EntityMetadata, DeferData> = new Map()
     private logger: Logger
 
     constructor(private opts: {logger: Logger}) {
@@ -26,22 +26,22 @@ export class DeferList {
         }
     }
 
-    getData(metadata: EntityMetadata) {
-        let list = this.deferMap.get(metadata)
+    values(): Map<EntityMetadata, DeferData> {
+        return new Map(this.map)
+    }
+
+    clear(): void {
+        this.logger.debug(`cleared`)
+        this.map.clear()
+    }
+
+    private getData(metadata: EntityMetadata) {
+        let list = this.map.get(metadata)
         if (list == null) {
             list = {ids: new Set(), relations: {}}
-            this.deferMap.set(metadata, list)
+            this.map.set(metadata, list)
         }
 
         return list
-    }
-
-    values() {
-        return [...this.deferMap.entries()]
-    }
-
-    clear() {
-        this.logger.debug(`cleared`)
-        this.deferMap.clear()
     }
 }

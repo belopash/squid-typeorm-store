@@ -20,17 +20,17 @@ export class ChangeMap {
         this.logger = this.opts.logger.child('changes')
     }
 
-    get(metadata: EntityMetadata, id: string) {
-        return this.getUpdates(metadata).get(id)
+    get(metadata: EntityMetadata, id: string): ChangeType | undefined {
+        return this.getChanges(metadata).get(id)
     }
 
-    set(metadata: EntityMetadata, id: string, type: ChangeType) {
-        this.getUpdates(metadata).set(id, type)
+    set(metadata: EntityMetadata, id: string, type: ChangeType): this {
+        this.getChanges(metadata).set(id, type)
         this.logger.debug(`entity ${metadata.name} ${id} marked as ${type}`)
         return this
     }
 
-    insert(metadata: EntityMetadata, id: string) {
+    insert(metadata: EntityMetadata, id: string): void {
         const prevType = this.get(metadata, id)
         switch (prevType) {
             case undefined:
@@ -48,7 +48,7 @@ export class ChangeMap {
         }
     }
 
-    upsert(metadata: EntityMetadata, id: string) {
+    upsert(metadata: EntityMetadata, id: string): void {
         const prevType = this.get(metadata, id)
         switch (prevType) {
             case ChangeType.Insert:
@@ -63,11 +63,11 @@ export class ChangeMap {
         }
     }
 
-    remove(metadata: EntityMetadata, id: string) {
+    remove(metadata: EntityMetadata, id: string): void {
         const prevType = this.get(metadata, id)
         switch (prevType) {
             case ChangeType.Insert:
-                this.getUpdates(metadata).delete(id)
+                this.getChanges(metadata).delete(id)
                 break
             case ChangeType.Remove:
                 this.logger.debug(`entity ${metadata.name} ${id} already marked as ${ChangeType.Remove}`)
@@ -77,7 +77,16 @@ export class ChangeMap {
         }
     }
 
-    getUpdates(metadata: EntityMetadata) {
+    clear(): void {
+        this.logger.debug(`cleared`)
+        this.map.clear()
+    }
+
+    values(): Map<EntityMetadata, Map<string, ChangeType>> {
+        return new Map(this.map)
+    }
+
+    private getChanges(metadata: EntityMetadata): Map<string, ChangeType> {
         let map = this.map.get(metadata)
         if (map == null) {
             map = new Map()
@@ -85,10 +94,5 @@ export class ChangeMap {
         }
 
         return map
-    }
-
-    clear() {
-        this.logger.debug(`cleared`)
-        this.map.clear()
     }
 }

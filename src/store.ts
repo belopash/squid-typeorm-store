@@ -22,16 +22,16 @@ import {copy, splitIntoBatches} from './utils/misc'
 
 export {Entity, EntityClass, FindManyOptions, FindOneOptions}
 
-export type EntityType = {
+export interface EntityType extends ObjectLiteral {
     id: string
 }
 
-export type ChangeSet<E extends EntityType> = {
+export type ChangeSet = {
     metadata: EntityMetadata
-    inserts: E[]
-    upserts: E[]
+    inserts: EntityType[]
+    upserts: EntityType[]
     removes: string[]
-    extraUpserts: E[]
+    extraUpserts: EntityType[]
 }
 
 export interface GetOptions<Entity = any> {
@@ -358,9 +358,14 @@ export class StoreWithCache extends Store {
     }
 
     private computeChangeSets() {
-        const changeSets: ChangeSet<any>[] = []
+        const changes = this.updates.values()
+
+        const changeSets: ChangeSet[] = []
         for (const metadata of this.commitOrder) {
-            const changeSet = this.getChangeSet(metadata.target)
+            const entityChanges = changes.get(metadata)
+            if (entityChanges == null) continue
+
+            const changeSet = this.computeChangeSet(metadata, entityChanges)
             changeSets.push(changeSet)
         }
 
@@ -369,17 +374,14 @@ export class StoreWithCache extends Store {
         return changeSets
     }
 
-    private getChangeSet<E extends EntityType>(target: EntityTarget<E>): ChangeSet<E> {
-        const metadata = this.getEntityMetadata(target)
-
-        const inserts: E[] = []
-        const upserts: E[] = []
+    private computeChangeSet(metadata: EntityMetadata, changes: Map<string, ChangeType>): ChangeSet {
+        const inserts: EntityType[] = []
+        const upserts: EntityType[] = []
         const removes: string[] = []
-        const extraUpserts: E[] = []
+        const extraUpserts: EntityType[] = []
 
-        const updates = this.updates.getUpdates(metadata)
-        for (const [id, type] of updates) {
-            const cached = this.cache.get(metadata, id) as CachedEntity<E>
+        for (const [id, type] of changes) {
+            const cached = this.cache.get<EntityType>(metadata, id)
 
             switch (type) {
                 case ChangeType.Insert: {
@@ -418,7 +420,9 @@ export class StoreWithCache extends Store {
 
     private async load(): Promise<void> {
         await this.currentLoad.runExclusive(async () => {
-            for (const [metadata, data] of this.defers.values()) {
+            const defers = this.defers.values()
+
+            for (const [metadata, data] of defers) {
                 const ids = Array.from(data.ids)
 
                 for (let batch of splitIntoBatches(ids, 30000)) {
