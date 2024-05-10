@@ -63,8 +63,8 @@ export class CacheMap {
 
         for (const column of metadata.nonVirtualColumns) {
             const objectColumnValue = column.getEntityValue(entity)
-            if (objectColumnValue !== undefined) {
-                column.setEntityValue(cachedEntity, copy(objectColumnValue))
+            if (isNew || objectColumnValue !== undefined) {
+                column.setEntityValue(cachedEntity, copy(objectColumnValue ?? null))
             }
         }
 
