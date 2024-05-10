@@ -1,7 +1,13 @@
 import {createLogger, Logger} from '@subsquid/logger'
-import {Entity as _Entity, Entity, EntityClass, FindManyOptions, FindOneOptions, Store} from '@subsquid/typeorm-store'
+import {
+    Entity as _Entity,
+    Entity,
+    EntityClass,
+    FindManyOptions as FindManyOptions_,
+    FindOneOptions as FindOneOptions_,
+    Store,
+} from '@subsquid/typeorm-store'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
-import {def} from '@subsquid/util-internal'
 import assert from 'assert'
 import {Mutex} from 'async-mutex'
 import {
@@ -14,13 +20,12 @@ import {
     ObjectLiteral,
 } from 'typeorm'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
-import {CachedEntity, CacheMap} from './utils/cacheMap'
+import {CacheMap} from './utils/cacheMap'
 import {DeferList} from './utils/deferList'
-import {getCommitOrder} from './utils/relationGraph'
 import {ChangeMap, ChangeType} from './utils/changeMap'
 import {copy, splitIntoBatches} from './utils/misc'
 
-export {Entity, EntityClass, FindManyOptions, FindOneOptions}
+export {Entity, EntityClass}
 
 export interface EntityType extends ObjectLiteral {
     id: string
@@ -34,9 +39,17 @@ export type ChangeSet = {
     extraUpserts: EntityType[]
 }
 
-export interface GetOptions<Entity = any> {
+export interface GetOptions<E = any> {
     id: string
-    relations?: FindOptionsRelations<Entity>
+    relations?: FindOptionsRelations<E>
+}
+
+export interface FindOneOptions<E> extends FindOneOptions_<E> {
+    cache?: boolean
+}
+
+export interface FindManyOptions<E> extends FindManyOptions_<E> {
+    cache?: boolean
 }
 
 // @ts-ignore
@@ -142,28 +155,37 @@ export class StoreWithCache extends Store {
 
     async find<E extends EntityType>(entityClass: EntityTarget<E>, options: FindManyOptions<E>): Promise<E[]> {
         await this.commit()
-        const res = await super.find(entityClass as EntityClass<E>, options)
-        for (const entity of res) {
-            this.traverseEntity(entity, options.relations || null, (e) => {
-                const md = this.getEntityMetadata(e.constructor)
-                this.cache.add(md, e)
-            })
+
+        const {cache, ...opts} = options
+        const res = await super.find(entityClass as EntityClass<E>, opts)
+
+        if (cache ?? true) {
+            for (const entity of res) {
+                this.traverseEntity(entity, opts.relations || null, (e) => {
+                    const md = this.getEntityMetadata(e.constructor)
+                    this.cache.add(md, e)
+                })
+            }
         }
+
         return res
     }
 
     async findBy<E extends EntityType>(
         entityClass: EntityTarget<E>,
-        where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
+        where: FindOptionsWhere<E> | FindOptionsWhere<E>[],
+        cache?: boolean
     ): Promise<E[]> {
         await this.commit()
         const res = await super.findBy(entityClass as EntityClass<E>, where)
 
-        for (const entity of res) {
-            this.traverseEntity(entity, null, (e) => {
-                const md = this.getEntityMetadata(entityClass)
-                this.cache.add(md, e)
-            })
+        if (cache ?? true) {
+            for (const entity of res) {
+                this.traverseEntity(entity, null, (e) => {
+                    const md = this.getEntityMetadata(entityClass)
+                    this.cache.add(md, e)
+                })
+            }
         }
 
         return res
@@ -174,13 +196,17 @@ export class StoreWithCache extends Store {
         options: FindOneOptions<E>
     ): Promise<E | undefined> {
         await this.commit()
-        const res = await super.findOne(entityClass as EntityClass<E>, options)
 
-        if (res != null) {
-            this.traverseEntity(res, options.relations || null, (e) => {
-                const md = this.getEntityMetadata(e.constructor)
-                this.cache.add(md, e)
-            })
+        const {cache, ...opts} = options
+        const res = await super.findOne(entityClass as EntityClass<E>, opts)
+
+        if (cache ?? true) {
+            if (res != null) {
+                this.traverseEntity(res, opts.relations || null, (e) => {
+                    const md = this.getEntityMetadata(e.constructor)
+                    this.cache.add(md, e)
+                })
+            }
         }
 
         return res
@@ -188,39 +214,55 @@ export class StoreWithCache extends Store {
 
     async findOneOrFail<E extends EntityType>(entityClass: EntityTarget<E>, options: FindOneOptions<E>): Promise<E> {
         await this.commit()
-        const res = await super.findOneOrFail(entityClass as EntityClass<E>, options)
-        this.traverseEntity(res, options.relations || null, (e) => {
-            const md = this.getEntityMetadata(e.constructor)
-            this.cache.add(md, e)
-        })
+
+        const {cache, ...opts} = options
+        const res = await super.findOneOrFail(entityClass as EntityClass<E>, opts)
+
+        if (cache ?? true) {
+            this.traverseEntity(res, opts.relations || null, (e) => {
+                const md = this.getEntityMetadata(e.constructor)
+                this.cache.add(md, e)
+            })
+        }
+
         return res
     }
 
     async findOneBy<E extends EntityType>(
         entityClass: EntityTarget<E>,
-        where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
+        where: FindOptionsWhere<E> | FindOptionsWhere<E>[],
+        cache?: boolean
     ): Promise<E | undefined> {
         await this.commit()
+
         const res = await super.findOneBy(entityClass as EntityClass<E>, where)
-        if (res != null) {
+
+        if (cache ?? true) {
             this.traverseEntity(res, null, (e) => {
                 const md = this.getEntityMetadata(e.constructor)
                 this.cache.add(md, e)
             })
         }
+
         return res
     }
 
     async findOneByOrFail<E extends EntityType>(
         entityClass: EntityTarget<E>,
-        where: FindOptionsWhere<E> | FindOptionsWhere<E>[]
+        where: FindOptionsWhere<E> | FindOptionsWhere<E>[],
+        cache?: boolean
     ): Promise<E> {
         await this.commit()
+
         const res = await super.findOneByOrFail(entityClass as EntityClass<E>, where)
-        this.traverseEntity(res, null, (e) => {
-            const md = this.getEntityMetadata(e.constructor)
-            this.cache.add(md, e)
-        })
+
+        if (cache ?? true) {
+            this.traverseEntity(res, null, (e) => {
+                const md = this.getEntityMetadata(e.constructor)
+                this.cache.add(md, e)
+            })
+        }
+
         return res
     }
 
@@ -543,13 +585,14 @@ export class StoreWithCache extends Store {
     }
 
     private traverseEntity(
-        entity: ObjectLiteral,
+        entity: ObjectLiteral | null | undefined,
         mask: FindOptionsRelations<any> | null,
         fn: (e: ObjectLiteral) => void
     ) {
-        const metadata = this.getEntityMetadata(entity.constructor)
+        if (entity == null) return
 
         if (mask != null) {
+            const metadata = this.getEntityMetadata(entity.constructor)
             for (const relation of metadata.relations) {
                 const inverseMask = mask[relation.propertyName]
                 if (!inverseMask) continue
@@ -560,7 +603,7 @@ export class StoreWithCache extends Store {
                     for (const entity of inverseEntity) {
                         this.traverseEntity(entity, inverseMask === true ? null : inverseMask, fn)
                     }
-                } else if (inverseEntity != null) {
+                } else {
                     this.traverseEntity(inverseEntity, inverseMask === true ? null : inverseMask, fn)
                 }
             }
