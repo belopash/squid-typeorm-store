@@ -274,12 +274,14 @@ export class StoreWithCache extends Store {
     ): Promise<E | undefined> {
         const {id, ...options} = parseGetOptions(idOrOptions)
 
-        let entity = this.getCached(entityClass, id, options.relations)
+        const metadata = this.getEntityMetadata(entityClass)
+
+        let entity = this.getCached<E>(metadata, id, options.relations)
         if (entity !== undefined) return entity ?? undefined
 
         await this.load()
 
-        entity = this.getCached(entityClass, id, options.relations)
+        entity = this.getCached(metadata, id, options.relations)
         if (entity !== undefined) return entity ?? undefined
 
         return await this.findOne(entityClass, {where: {id} as any, relations: options.relations})
@@ -482,19 +484,18 @@ export class StoreWithCache extends Store {
     }
 
     private getCached<E extends EntityType>(
-        entityClass: EntityTarget<E>,
+        metadata: EntityMetadata,
         id: string,
         mask?: FindOptionsRelations<any>
     ): E | null | undefined {
-        const md = this.getEntityMetadata(entityClass)
-        const cached = this.cache.get<E>(md, id)
+        const cached = this.cache.get<E>(metadata, id)
 
         if (cached == null) {
             return undefined
         } else if (cached.value == null) {
             return null
         } else {
-            return this.cloneEntity(cached.value, mask || null)
+            return this.cloneEntity(cached.value, mask)
         }
     }
 
@@ -545,7 +546,7 @@ export class StoreWithCache extends Store {
         return index
     }
 
-    private cloneEntity<E extends EntityType>(entity: E, mask: FindOptionsRelations<any> | null): E | undefined {
+    private cloneEntity<E extends EntityType>(entity: E, mask?: FindOptionsRelations<any>): E | undefined {
         const metadata = this.getEntityMetadata(entity.constructor)
 
         const clonedEntity = metadata.create()
@@ -562,18 +563,21 @@ export class StoreWithCache extends Store {
                 const inverseMask = mask[relation.propertyName]
                 if (!inverseMask) continue
 
-                const inverseEntity = relation.getEntityValue(entity)
-                if (inverseEntity === undefined) {
+                const inverseEntityMock = relation.getEntityValue(entity)
+
+                if (inverseEntityMock === undefined) {
                     return undefined // relation is missing, but required
-                } else if (inverseEntity === null) {
+                } else if (inverseEntityMock === null) {
                     relation.setEntityValue(clonedEntity, null)
                 } else {
-                    const cachedInverseEntity = this.cloneEntity(
-                        inverseEntity,
-                        typeof inverseMask === 'boolean' ? null : inverseMask
+                    const cachedInverseEntity = this.getCached(
+                        relation.inverseEntityMetadata,
+                        inverseEntityMock.id,
+                        typeof inverseMask === 'boolean' ? undefined : inverseMask
                     )
-                    if (cachedInverseEntity == null) {
-                        return undefined
+
+                    if (cachedInverseEntity === undefined) {
+                        return undefined // unable to build whole relation chain
                     } else {
                         relation.setEntityValue(clonedEntity, cachedInverseEntity)
                     }

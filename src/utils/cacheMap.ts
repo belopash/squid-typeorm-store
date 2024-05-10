@@ -1,14 +1,9 @@
 import {EntityMetadata, ObjectLiteral} from 'typeorm'
 import {copy} from './misc'
 import {Logger} from '@subsquid/logger'
-import assert from 'assert'
 
 export class CachedEntity<E extends ObjectLiteral = ObjectLiteral> {
-    value: E | null
-
-    constructor() {
-        this.value = null
-    }
+    constructor(public value: E | null = null) {}
 }
 
 export class CacheMap {
@@ -80,16 +75,10 @@ export class CacheMap {
             const inverseMetadata = relation.inverseEntityMetadata
 
             if (inverseEntity != null) {
-                const inverseCacheMap = this.getEntityCache(inverseMetadata)
-                const inverseCachedEntity = inverseCacheMap.get(inverseEntity.id)?.value
+                const mockEntity = inverseMetadata.create()
+                Object.assign(mockEntity, {id: inverseEntity.id})
 
-                assert(
-                    inverseCachedEntity != null,
-                    `relation ${inverseMetadata.name} ${inverseEntity.id} of ` +
-                        `entity ${metadata.name} ${entity.id} is missing`
-                )
-
-                relation.setEntityValue(cachedEntity, inverseCachedEntity)
+                relation.setEntityValue(cachedEntity, mockEntity)
             } else if (isNew || inverseEntity === null) {
                 relation.setEntityValue(cachedEntity, null)
             }
