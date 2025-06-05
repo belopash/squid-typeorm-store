@@ -17,57 +17,54 @@ export function getMetadatasInCommitOrder(
     let commitOrder = connection[CommitOrderSymbol]
     if (commitOrder != null) return commitOrder
 
-    let states: Map<string, NodeState> = new Map()
+    const nodeState: Record<string, NodeState> = {}
 
     function visit(node: EntityMetadata) {
-        if (states.get(node.name) !== NodeState.Unvisited) return
+        if (nodeState[node.name] && nodeState[node.name] !== NodeState.Unvisited) return
 
-        states.set(node.name, NodeState.Visiting)
+        nodeState[node.name] = NodeState.Visiting
 
-        for (let edge of node.relations) {
+        for (const edge of node.relations) {
             if (edge.foreignKeys.length === 0) continue
 
-            let target = edge.inverseEntityMetadata
-            let targetState = states.get(target.name)
+            const target = edge.inverseEntityMetadata
 
-            if (targetState === NodeState.Unvisited) {
-                visit(target)
-            } else if (targetState === NodeState.Visiting) {
-                let inverseEdge = target.relations.find((r) => r.inverseEntityMetadata === node)
-                if (inverseEdge != null) {
-                    let edgeWeight = getWeight(edge)
-                    let inverseEdgeWeight = getWeight(inverseEdge)
+            switch (nodeState[target.name]) {
+                case undefined:
+                case NodeState.Unvisited: {
+                    visit(target)
+                    break
+                }
+                case NodeState.Visiting: {
+                    const reversedEdge = target.relations.find((r) => r.inverseEntityMetadata === node)
+                    if (reversedEdge != null) {
+                        const edgeWeight = getWeight(edge)
+                        const reversedEdgeWeight = getWeight(reversedEdge)
 
-                    if (edgeWeight > inverseEdgeWeight) {
-                        for (let r of target.relations) {
-                            visit(r.inverseEntityMetadata)
+                        if (edgeWeight > reversedEdgeWeight) {
+                            for (const r of target.relations) {
+                                visit(r.inverseEntityMetadata)
+                            }
+
+                            nodeState[target.name] = NodeState.Visited
+                            commitOrder?.push(target)
                         }
-
-                        states.set(target.name, NodeState.Visited)
-                        commitOrder?.push(target)
                     }
+                    break
                 }
             }
         }
 
-        let nodeState = states.get(node.name)
-
-        if (nodeState !== NodeState.Visited) {
-            states.set(node.name, NodeState.Visited)
+        if (nodeState[node.name] !== NodeState.Visited) {
+            nodeState[node.name] = NodeState.Visited
             commitOrder?.push(node)
         }
     }
 
-    commitOrder = []
-
-    for (let node of connection.entityMetadatas) {
-        if (!states.has(node.name)) {
-            states.set(node.name, NodeState.Unvisited)
-        }
-
+    connection[CommitOrderSymbol] = commitOrder = []
+    for (const node of connection.entityMetadatas) {
         visit(node)
     }
-    connection[CommitOrderSymbol] = commitOrder
 
     return commitOrder
 }
