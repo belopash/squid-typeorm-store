@@ -101,7 +101,7 @@ export class Store {
         this.batchWriteOperations = opts.batchWriteOperations
         this.cacheEntities = opts.cacheEntities
         this.syncEntities = opts.syncEntities
-        this.defers = new DeferList(this.logger)
+        this.defers = new DeferList(this.logger?.child('defer'))
     }
 
     defer<E extends EntityLiteral>(target: EntityTarget<E>, id: string): DeferredEntity<E>

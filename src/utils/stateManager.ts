@@ -29,10 +29,10 @@ export class StateManager {
 
     constructor({connection, logger}: {connection: DataSource; logger?: Logger}) {
         this.connection = connection
-        this.cacheMap = new CacheMap(this.logger)
+        this.logger = logger
+        this.cacheMap = new CacheMap(this.logger?.child('cache'))
         this.stateMap = new Map()
         this.commitOrder = getMetadatasInCommitOrder(connection)
-        this.logger = logger?.child('state')
     }
 
     get<E extends EntityLiteral>(

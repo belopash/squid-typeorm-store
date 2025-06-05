@@ -264,7 +264,7 @@ export class TypeormDatabase {
         let store = new Store({
             em,
             state: this.getStateManager(),
-            logger: this.getLogger(),
+            logger: this.getLogger().child('store'),
             changes: changeWriter,
             batchWriteOperations: this.batchWriteOperations,
             cacheEntities: this.cacheEntities,
@@ -308,7 +308,7 @@ export class TypeormDatabase {
 
     @def
     private getLogger() {
-        return createLogger('sqd:typeorm-db')
+        return createLogger('sqd:db')
     }
 
     private getStateManager() {
@@ -317,7 +317,7 @@ export class TypeormDatabase {
         if (stateManager == null) {
             stateManager = new StateManager({
                 connection,
-                logger: this.getLogger(),
+                logger: this.getLogger().child('state'),
             })
             connection[StateManagerSymbol] = stateManager
         }
