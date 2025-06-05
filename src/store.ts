@@ -15,6 +15,7 @@ import {EntityLiteral, noNull, splitIntoBatches, traverseEntity} from './utils/m
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import assert from 'assert'
 import {EntityClass} from '@subsquid/typeorm-store'
+import {DeferList} from './utils/deferList'
 
 export {EntityTarget, EntityLiteral}
 
@@ -81,6 +82,7 @@ export interface StoreOptions {
 export class Store {
     protected em: EntityManager
     protected state: StateManager
+    protected defers: DeferList
     protected changes?: ChangeTracker
     protected logger?: Logger
 
@@ -99,14 +101,22 @@ export class Store {
         this.batchWriteOperations = opts.batchWriteOperations
         this.cacheEntities = opts.cacheEntities
         this.syncEntities = opts.syncEntities
+        this.defers = new DeferList(this.logger)
     }
 
-    get _em() {
-        return this.em
-    }
+    defer<E extends EntityLiteral>(target: EntityTarget<E>, id: string): DeferredEntity<E>
+    defer<E extends EntityLiteral>(target: EntityTarget<E>, options: GetOptions<E>): DeferredEntity<E>
+    defer<E extends EntityLiteral>(target: EntityTarget<E>, idOrOptions: string | GetOptions<E>): DeferredEntity<E> {
+        const md = this.getEntityMetadata(target)
 
-    get _state() {
-        return this.state
+        const options = parseGetOptions(idOrOptions)
+        this.defers.add(md, options.id, options.relations)
+
+        return new DeferredEntity({
+            get: async () => this.get(target, options),
+            getOrFail: async () => this.getOrFail(target, options),
+            getOrInsert: async (create) => this.getOrInsert(target, options, create),
+        })
     }
 
     /**
@@ -335,6 +345,43 @@ export class Store {
         return e
     }
 
+    async getOrInsert<E extends EntityLiteral>(
+        target: EntityTarget<E>,
+        id: string,
+        create: (id: string) => E | Promise<E>
+    ): Promise<E>
+    async getOrInsert<E extends EntityLiteral>(
+        target: EntityTarget<E>,
+        options: GetOptions<E>,
+        create: (id: string) => E | Promise<E>
+    ): Promise<E>
+    async getOrInsert<E extends EntityLiteral>(
+        target: EntityTarget<E>,
+        idOrOptions: string | GetOptions<E>,
+        create: (id: string) => E | Promise<E>
+    ): Promise<E> {
+        const options = parseGetOptions(idOrOptions)
+        let e = await this.get(target, options)
+
+        if (e == null) {
+            e = await create(options.id)
+            await this.insert(e)
+        }
+
+        return e
+    }
+
+    /**
+     * @deprecated use {@link getOrInsert} instead
+     */
+    async getOrCreate<E extends EntityLiteral>(
+        target: EntityTarget<E>,
+        idOrOptions: string | GetOptions<E>,
+        create: (id: string) => E | Promise<E>
+    ) {
+        return this.getOrInsert(target, idOrOptions as any, create)
+    }
+
     reset(): void {
         this.state.reset()
     }
@@ -418,4 +465,33 @@ function parseGetOptions<E>(idOrOptions: string | GetOptions<E>): GetOptions<E> 
 
 function getIdFromWhere(where?: FindOptionsWhere<EntityLiteral>) {
     return typeof where?.id === 'string' ? where.id : undefined
+}
+
+export class DeferredEntity<E extends EntityLiteral> {
+    constructor(
+        private opts: {
+            get: () => Promise<E | undefined>
+            getOrFail: () => Promise<E>
+            getOrInsert: (create: (id: string) => E | Promise<E>) => Promise<E>
+        }
+    ) {}
+
+    async get(): Promise<E | undefined> {
+        return this.opts.get()
+    }
+
+    async getOrFail(): Promise<E> {
+        return this.opts.getOrFail()
+    }
+
+    async getOrInsert(create: (id: string) => E | Promise<E>): Promise<E> {
+        return this.opts.getOrInsert(create)
+    }
+
+    /**
+     * @deprecated use {@link getOrInsert} instead
+     */
+    async getOrCreate(create: (id: string) => E | Promise<E>): Promise<E> {
+        return this.getOrInsert(create)
+    }
 }

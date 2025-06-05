@@ -9,17 +9,15 @@ export type DeferData = {
 
 export class DeferList {
     private map: Map<EntityMetadata, DeferData> = new Map()
-    private logger: Logger
 
-    constructor(private opts: {logger: Logger}) {
-        this.logger = this.opts.logger.child('defer')
+    constructor(private logger?: Logger) {
     }
 
     add<E extends ObjectLiteral>(metadata: EntityMetadata, id: string, relations?: FindOptionsRelations<E>) {
         const data = this.getData(metadata)
         data.ids.add(id)
 
-        this.logger.debug(`entity ${metadata.name} ${id} deferred`)
+        this.logger?.debug(`entity ${metadata.name} ${id} deferred`)
 
         if (relations != null) {
             data.relations = mergeRelations(data.relations, relations)
@@ -31,7 +29,7 @@ export class DeferList {
     }
 
     clear(): void {
-        this.logger.debug(`cleared`)
+        this.logger?.debug(`cleared`)
         this.map.clear()
     }
 
