@@ -238,6 +238,15 @@ export class Store {
         })
     }
 
+    /**
+     * Alias for {@link Store.delete}
+     */
+    remove<E extends EntityLiteral>(e: E | E[]): Promise<void>
+    remove<E extends EntityLiteral>(target: EntityTarget<E>, id: string | string[]): Promise<void>
+    remove<E extends EntityLiteral>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
+        return this.delete(e as any, id as any)
+    }
+
     private async _delete(metadata: EntityMetadata, ids: string[]) {
         this.logger?.debug(`delete ${metadata.name} ${ids.length} entities`)
         await this.changes?.trackDelete(metadata.target as EntityClass<any>, ids)

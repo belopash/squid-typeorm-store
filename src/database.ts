@@ -25,13 +25,13 @@ export interface TypeormDatabaseOptions extends TypeormDatabaseOptions_ {
      * If true, will cache entities on request
      * @default true
      */
-    cacheEntities: boolean
+    cacheEntities?: boolean
 
     /**
      * If true, will sync entities on request
      * @default true
      */
-    syncEntities: boolean
+    syncEntities?: boolean
 
     /**
      * If true, will reset the state on commit
@@ -63,7 +63,7 @@ export class TypeormDatabase {
         this.cacheEntities = options?.cacheEntities ?? true
         this.syncEntities = options?.syncEntities ?? true
         this.resetOnCommit = options?.resetOnCommit ?? true
-        this.supportsHotBlocks = options?.supportHotBlocks !== false
+        this.supportsHotBlocks = options?.supportHotBlocks ?? true
         this.projectDir = options?.projectDir || process.cwd()
     }
 
