@@ -1,10 +1,10 @@
 import {assertNotNull} from '@subsquid/util-internal'
 import expect from 'expect'
 import {Equal} from 'typeorm'
-import {StoreWithCache} from '../store'
+import {Store} from '../store'
 import {Item, Order} from './lib/model'
 import {getEntityManager, useDatabase} from './util'
-import {getCommitOrder} from '../utils/relationGraph'
+import {StateManager} from '../utils/stateManager'
 
 describe('Store', function () {
     describe('.save()', function () {
@@ -77,25 +77,25 @@ describe('Store', function () {
 
         it('remove by passing an entity', async function () {
             let store = await createStore()
-            await store.remove(new Item('1'))
+            await store.delete(Item, '1')
             await expect(getItemIds(store)).resolves.toEqual(['2', '3'])
         })
 
         it('remove by passing an array of entities', async function () {
             let store = await createStore()
-            await store.remove([new Item('1'), new Item('3')])
+            await store.delete(Item, ['1', '3'])
             await expect(getItemIds(store)).resolves.toEqual(['2'])
         })
 
         it('remove by passing an id', async function () {
             let store = await createStore()
-            await store.remove(Item, '1')
+            await store.delete(Item, '1')
             await expect(getItemIds(store)).resolves.toEqual(['2', '3'])
         })
 
         it('remove by passing an array of ids', async function () {
             let store = await createStore()
-            await store.remove(Item, ['1', '2'])
+            await store.delete(Item, ['1', '2'])
             await expect(getItemIds(store)).resolves.toEqual(['3'])
         })
     })
@@ -164,15 +164,21 @@ describe('Store', function () {
     })
 })
 
-export async function createStore(): Promise<StoreWithCache> {
+export async function createStore(): Promise<Store> {
     const em = await getEntityManager()
-    return new StoreWithCache(() => em, {commitOrder: getCommitOrder(em.connection.entityMetadatas)})
+    return new Store({
+        em,
+        state: new StateManager({connection: em.connection}),
+        batchWriteOperations: true,
+        cacheEntities: true,
+        syncEntities: true,
+    })
 }
 
-export async function getItems(store: StoreWithCache): Promise<Item[]> {
+export async function getItems(store: Store): Promise<Item[]> {
     return store.find(Item, {where: {}})
 }
 
-export function getItemIds(store: StoreWithCache): Promise<string[]> {
+export function getItemIds(store: Store): Promise<string[]> {
     return getItems(store).then((items) => items.map((it) => it.id).sort())
 }

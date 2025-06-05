@@ -1,6 +1,6 @@
 {
     "name": "@belopash/typeorm-store",
-    "version": "1.5.0",
+    "version": "1.6.0-rc.1",
     "description": "Optimized TypeORM based storage for squid mappings",
     "repository": {
         "url": "https://github.com/belopash/squid-typeorm-store"
@@ -8,6 +8,7 @@
     "main": "lib/index.js",
     "files": [
         "lib",
+        "!lib/test",
         "src",
         "!src/test"
     ],
@@ -15,25 +16,25 @@
         "build": "rm -rf lib && tsc",
         "up": "docker-compose up -d 2>&1",
         "down": "docker-compose down -v 2>&1",
-        "test": "mocha -r dotenv/config lib/test/*.test.js --exit --timeout 5000"
+        "test": "npx mocha -r dotenv/config lib/test/*.test.js --exit --timeout 5000"
     },
     "dependencies": {
-        "@subsquid/logger": "^1.3.3",
         "@subsquid/util-internal": "^3.2.0",
-        "async-mutex": "^0.5.0"
+        "fast-copy": "^3.0.2"
     },
     "peerDependencies": {
+        "@subsquid/logger": "^1",
         "@subsquid/typeorm-config": "^4",
         "@subsquid/typeorm-store": "^1",
         "pg": "^8.11.3",
         "typeorm": "^0.3.16"
     },
     "devDependencies": {
-        "@types/mocha": "^10.0.6",
+        "@types/mocha": "^10.0.10",
         "@types/node": "^20.12.7",
         "@types/pg": "^8.11.5",
         "expect": "^29.7.0",
-        "mocha": "^10.4.0",
+        "mocha": "^11.5.0",
         "typescript": "^5.4.5"
     }
 }

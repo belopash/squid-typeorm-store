@@ -1,5 +1,5 @@
 import {EntityMetadata, FindOptionsRelations, ObjectLiteral} from 'typeorm'
-import {mergeRelataions} from './misc'
+import {mergeRelations} from './misc'
 import {Logger} from '@subsquid/logger'
 
 export type DeferData = {
@@ -22,7 +22,7 @@ export class DeferList {
         this.logger.debug(`entity ${metadata.name} ${id} deferred`)
 
         if (relations != null) {
-            data.relations = mergeRelataions(data.relations, relations)
+            data.relations = mergeRelations(data.relations, relations)
         }
     }
 
