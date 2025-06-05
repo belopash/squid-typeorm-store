@@ -11,6 +11,7 @@ import assert from 'assert'
 import {DataSource, EntityManager} from 'typeorm'
 import {Store} from './store'
 import {StateManager} from './utils/stateManager'
+import {createOrmConfig} from '@subsquid/typeorm-config'
 
 export {IsolationLevel}
 
@@ -67,8 +68,70 @@ export class TypeormDatabase {
         this.projectDir = options?.projectDir || process.cwd()
     }
 
-    connect: () => Promise<DatabaseState> = TypeormDatabase_.prototype.connect.bind(this)
-    disconnect: () => Promise<void> = TypeormDatabase_.prototype.disconnect.bind(this)
+    async connect(): Promise<DatabaseState> {
+        assert(this.con == null, 'already connected')
+
+        let cfg = createOrmConfig({projectDir: this.projectDir})
+        this.con = new DataSource(cfg)
+
+        await this.con.initialize()
+
+        try {
+            return await this.con.transaction('SERIALIZABLE', (em) => this.initTransaction(em))
+        } catch (e: any) {
+            await this.con.destroy().catch(() => {}) // ignore error
+            this.con = undefined
+            throw e
+        }
+    }
+
+    async disconnect(): Promise<void> {
+        await this.con?.destroy().catch(() => {}) // ignore error
+        this.con = undefined
+    }
+
+    private async initTransaction(em: EntityManager): Promise<DatabaseState> {
+        let schema = this.escapedSchema()
+
+        await em.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`)
+        await em.query(
+            `CREATE TABLE IF NOT EXISTS ${schema}.status (` +
+                `id int4 primary key, ` +
+                `height int4 not null, ` +
+                `hash text DEFAULT '0x', ` +
+                `nonce int4 DEFAULT 0` +
+                `)`
+        )
+        await em.query(
+            // for databases created by prev version of typeorm store
+            `ALTER TABLE ${schema}.status ADD COLUMN IF NOT EXISTS hash text DEFAULT '0x'`
+        )
+        await em.query(
+            // for databases created by prev version of typeorm store
+            `ALTER TABLE ${schema}.status ADD COLUMN IF NOT EXISTS nonce int DEFAULT 0`
+        )
+        await em.query(`CREATE TABLE IF NOT EXISTS ${schema}.hot_block (height int4 primary key, hash text not null)`)
+        await em.query(
+            `CREATE TABLE IF NOT EXISTS ${schema}.hot_change_log (` +
+                `block_height int4 not null references ${schema}.hot_block on delete cascade, ` +
+                `index int4 not null, ` +
+                `change jsonb not null, ` +
+                `PRIMARY KEY (block_height, index)` +
+                `)`
+        )
+
+        let status: (HashAndHeight & {nonce: number})[] = await em.query(
+            `SELECT height, hash, nonce FROM ${schema}.status WHERE id = 0`
+        )
+        if (status.length == 0) {
+            await em.query(`INSERT INTO ${schema}.status (id, height, hash) VALUES (0, -1, '0x')`)
+            status.push({height: -1, hash: '0x', nonce: 0})
+        }
+
+        let top: HashAndHeight[] = await em.query(`SELECT height, hash FROM ${schema}.hot_block ORDER BY height`)
+
+        return assertStateInvariants({...status[0], top})
+    }
 
     private async getState(em: EntityManager): Promise<DatabaseState> {
         let schema = this.escapedSchema()
