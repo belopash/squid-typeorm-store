@@ -5,6 +5,7 @@ import {
     FindOptionsOrder,
     FindOptionsRelations,
     FindOptionsWhere,
+    In,
 } from 'typeorm'
 import {EntityTarget} from 'typeorm/common/EntityTarget'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
@@ -87,6 +88,7 @@ export class Store {
     protected cacheEntities: boolean
 
     protected pendingCommit?: Future<void>
+    protected pendingLoad?: Future<void>
     protected isClosed = false
 
     constructor({em, changes, logger, state, ...opts}: StoreOptions) {
@@ -108,6 +110,35 @@ export class Store {
         this.defers.add(md, options.id, options.relations)
 
         return new DeferredEntity(target, options, this)
+    }
+
+    private async load(): Promise<void> {
+        await this.pendingLoad?.promise()
+
+        this.pendingLoad = createFuture()
+
+        try {
+            const defers = this.defers.values()
+
+            for (const [metadata, data] of defers) {
+                const ids = Array.from(data.ids)
+
+                for (let batch of splitIntoBatches(ids, 30000)) {
+                    if (batch.length == 0) continue
+                    await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
+                }
+
+                for (const id of ids) {
+                    this.state.persist(metadata.target, id)
+                }
+
+            }
+
+            this.defers.clear()
+        } finally {
+            this.pendingLoad.resolve()
+            this.pendingLoad = undefined
+        }
     }
 
     /**
@@ -332,6 +363,8 @@ export class Store {
         target: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>
     ): Promise<E | undefined> {
+        await this.load()
+
         const {id, relations, cacheEntities} = parseGetOptions(idOrOptions)
 
         let entity = this.state.get<E>(target, id, relations)
