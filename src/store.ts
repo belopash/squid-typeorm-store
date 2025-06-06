@@ -107,11 +107,7 @@ export class Store {
         const options = parseGetOptions(idOrOptions)
         this.defers.add(md, options.id, options.relations)
 
-        return new DeferredEntity({
-            get: async () => this.get(target, options),
-            getOrFail: async () => this.getOrFail(target, options),
-            getOrInsert: async (create) => this.getOrInsert(target, options, create),
-        })
+        return new DeferredEntity(target, options, this)
     }
 
     /**
@@ -475,23 +471,21 @@ function getIdFromWhere(where?: FindOptionsWhere<EntityLiteral>) {
 
 export class DeferredEntity<E extends EntityLiteral> {
     constructor(
-        private opts: {
-            get: () => Promise<E | undefined>
-            getOrFail: () => Promise<E>
-            getOrInsert: (create: (id: string) => E | Promise<E>) => Promise<E>
-        }
+        readonly target: EntityTarget<E>,
+        readonly opts: GetOptions<E>,
+        private store: Store
     ) {}
 
     async get(): Promise<E | undefined> {
-        return this.opts.get()
+        return this.store.get(this.target, this.opts)
     }
 
     async getOrFail(): Promise<E> {
-        return this.opts.getOrFail()
+        return this.store.getOrFail(this.target, this.opts)
     }
 
     async getOrInsert(create: (id: string) => E | Promise<E>): Promise<E> {
-        return this.opts.getOrInsert(create)
+        return this.store.getOrInsert(this.target, this.opts, create)
     }
 
     /**
