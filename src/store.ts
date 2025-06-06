@@ -250,7 +250,13 @@ export class Store {
     private async _delete(metadata: EntityMetadata, ids: string[]) {
         this.logger?.debug(`delete ${metadata.name} ${ids.length} entities`)
         await this.changes?.trackDelete(metadata.target as EntityClass<any>, ids)
-        await this.em.delete(metadata.target, ids) // NOTE: should be split by chunks too?
+        await this.deleteMany(metadata.target, ids)
+    }
+
+    private async deleteMany(target: EntityTarget<any>, ids: string[]) {
+        for (let b of splitIntoBatches(ids, 50000)) {
+            await this.em.delete(target, b)
+        }
     }
 
     async count<E extends EntityLiteral>(target: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
