@@ -169,9 +169,8 @@ export async function createStore(): Promise<Store> {
     return new Store({
         em,
         state: new StateManager({connection: em.connection}),
-        batchWriteOperations: true,
+        postponeWriteOperations: true,
         cacheEntities: true,
-        syncEntities: true,
     })
 }
 

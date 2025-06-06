@@ -20,7 +20,7 @@ export interface TypeormDatabaseOptions extends TypeormDatabaseOptions_ {
      * If true, will batch write operations
      * @default true
      */
-    batchWriteOperations?: boolean
+    postponeWriteOperations?: boolean
 
     /**
      * If true, will cache entities on request
@@ -29,28 +29,10 @@ export interface TypeormDatabaseOptions extends TypeormDatabaseOptions_ {
     cacheEntities?: boolean
 
     /**
-     * If true, will sync entities on request
-     * @default true
-     */
-    syncEntities?: boolean
-
-    /**
      * If true, will reset the state on commit
      * @default true
      */
     resetOnCommit?: boolean
-
-    /**
-     * Batch size for database operations
-     * @default 1000
-     */
-    batchSize?: number
-
-    /**
-     * Enable relation processing optimizations
-     * @default true
-     */
-    optimizeRelations?: boolean
 }
 
 const StateManagerSymbol = Symbol('StateManager')
@@ -58,9 +40,8 @@ const StateManagerSymbol = Symbol('StateManager')
 export class TypeormDatabase {
     protected statusSchema: string
     protected isolationLevel: IsolationLevel
-    protected batchWriteOperations: boolean
+    protected postponeWriteOperations: boolean
     protected cacheEntities: boolean
-    protected syncEntities: boolean
     protected resetOnCommit: boolean
     protected con?: DataSource & {
         [StateManagerSymbol]?: StateManager
@@ -72,9 +53,8 @@ export class TypeormDatabase {
     constructor(options?: TypeormDatabaseOptions) {
         this.statusSchema = options?.stateSchema || 'squid_processor'
         this.isolationLevel = options?.isolationLevel || 'SERIALIZABLE'
-        this.batchWriteOperations = options?.batchWriteOperations ?? true
+        this.postponeWriteOperations = options?.postponeWriteOperations ?? true
         this.cacheEntities = options?.cacheEntities ?? true
-        this.syncEntities = options?.syncEntities ?? true
         this.resetOnCommit = options?.resetOnCommit ?? true
         this.supportsHotBlocks = options?.supportHotBlocks ?? true
         this.projectDir = options?.projectDir || process.cwd()
@@ -278,9 +258,8 @@ export class TypeormDatabase {
             state: this.getStateManager(),
             logger: this.getLogger().child('store'),
             changes: changeWriter,
-            batchWriteOperations: this.batchWriteOperations,
+            postponeWriteOperations: this.postponeWriteOperations,
             cacheEntities: this.cacheEntities,
-            syncEntities: this.syncEntities,
         })
 
         try {

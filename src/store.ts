@@ -49,7 +49,6 @@ export interface FindOneOptions<Entity = any> {
     order?: FindOptionsOrder<Entity>
 
     cacheEntities?: boolean
-    syncEntities?: boolean
 }
 
 export interface FindManyOptions<Entity = any> extends FindOneOptions<Entity> {
@@ -63,7 +62,6 @@ export interface FindManyOptions<Entity = any> extends FindOneOptions<Entity> {
     take?: number
 
     cacheEntities?: boolean
-    syncEntities?: boolean
 }
 
 export interface StoreOptions {
@@ -71,9 +69,8 @@ export interface StoreOptions {
     state: StateManager
     changes?: ChangeTracker
     logger?: Logger
-    batchWriteOperations: boolean
+    postponeWriteOperations: boolean
     cacheEntities: boolean
-    syncEntities: boolean
 }
 
 /**
@@ -86,9 +83,8 @@ export class Store {
     protected changes?: ChangeTracker
     protected logger?: Logger
 
-    protected batchWriteOperations: boolean
+    protected postponeWriteOperations: boolean
     protected cacheEntities: boolean
-    protected syncEntities: boolean
 
     protected pendingCommit?: Future<void>
     protected isClosed = false
@@ -98,9 +94,8 @@ export class Store {
         this.changes = changes
         this.logger = logger?.child('store')
         this.state = state
-        this.batchWriteOperations = opts.batchWriteOperations
+        this.postponeWriteOperations = opts.postponeWriteOperations
         this.cacheEntities = opts.cacheEntities
-        this.syncEntities = opts.syncEntities
         this.defers = new DeferList(this.logger?.child('defer'))
     }
 
@@ -262,7 +257,7 @@ export class Store {
     async count<E extends EntityLiteral>(target: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
         return await this.performRead(async () => {
             return await this.em.count(target, options)
-        }, options)
+        })
     }
 
     async countBy<E extends EntityLiteral>(
@@ -284,7 +279,7 @@ export class Store {
             }
 
             return res
-        }, options)
+        })
     }
 
     async findBy<E extends EntityLiteral>(
@@ -308,7 +303,7 @@ export class Store {
             }
 
             return res
-        }, options)
+        })
     }
 
     async findOneBy<E extends EntityLiteral>(
@@ -346,7 +341,7 @@ export class Store {
         let entity = this.state.get<E>(target, id, relations)
         if (entity !== undefined) return noNull(entity)
 
-        return await this.findOne(target, {where: {id} as any, relations, cacheEntities, syncEntities: false})
+        return await this.findOne(target, {where: {id} as any, relations, cacheEntities})
     }
 
     async getOrFail<E extends EntityLiteral>(target: EntityTarget<E>, id: string): Promise<E>
@@ -432,11 +427,9 @@ export class Store {
         this.reset()
     }
 
-    private async performRead<T>(cb: () => Promise<T>, opts?: {syncEntities?: boolean}): Promise<T> {
+    private async performRead<T>(cb: () => Promise<T>): Promise<T> {
         this.assertNotClosed()
-        if (opts?.syncEntities ?? this.syncEntities) {
-            await this.sync()
-        }
+        await this.sync()
         return await cb()
     }
 
@@ -444,7 +437,7 @@ export class Store {
         this.assertNotClosed()
         await this.pendingCommit?.promise()
         await cb()
-        if (!this.batchWriteOperations) {
+        if (!this.postponeWriteOperations) {
             await this.sync()
         }
     }
