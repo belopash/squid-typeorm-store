@@ -45,7 +45,7 @@ export class CacheMap {
         this.map.clear()
     }
 
-    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, isNew = false): void {
+    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, opts?: {nullify?: boolean, override?: boolean}): void {
         const cacheMap = this.getEntityCache(metadata)
 
         let cached = cacheMap.get(entity.id)
@@ -54,34 +54,39 @@ export class CacheMap {
             cacheMap.set(entity.id, cached)
         }
 
-        let cachedEntity = cached.value
-        if (cachedEntity == null) {
-            cachedEntity = cached.value = metadata.create() as E
-            cachedEntity.id = entity.id
+        if (cached.value == null) {
+            cached.value = metadata.create() as E
+            cached.value.id = entity.id
             this.logger?.debug(`added entity ${metadata.name} ${entity.id}`)
         }
 
+        const cachedEntity = cached.value
+
         for (const column of metadata.nonVirtualColumns) {
             const objectColumnValue = column.getEntityValue(entity)
-            if (isNew || objectColumnValue !== undefined) {
-                column.setEntityValue(cachedEntity, clone(objectColumnValue ?? null))
-            }
+            const cachedColumnValue = column.getEntityValue(cachedEntity)
+            if (!opts?.override && cachedColumnValue !== undefined) continue
+            if (!opts?.nullify && objectColumnValue === undefined) continue
+            if (objectColumnValue === cachedColumnValue && objectColumnValue !== undefined) continue
+            column.setEntityValue(cachedEntity, clone(objectColumnValue ?? null))
         }
 
         for (const relation of metadata.relations) {
             if (!relation.isOwning) continue
 
-            const inverseEntity = relation.getEntityValue(entity) as EntityLiteral | null | undefined
+            const inverseEntity = relation.getEntityValue(entity)
+            const cachedInverseEntity = relation.getEntityValue(cachedEntity)
+
+            if (!opts?.override && cachedInverseEntity !== undefined) continue
+            if (!opts?.nullify && inverseEntity === undefined) continue
+            if (inverseEntity?.id === cachedInverseEntity?.id && inverseEntity != null) continue
+
             const inverseMetadata = relation.inverseEntityMetadata
-
-            if (inverseEntity != null) {
-                const mockEntity = inverseMetadata.create()
-                Object.assign(mockEntity, {id: inverseEntity.id})
-
-                relation.setEntityValue(cachedEntity, mockEntity)
-            } else if (isNew || inverseEntity === null) {
-                relation.setEntityValue(cachedEntity, null)
-            }
+            const mockEntity = inverseEntity == null ? null : inverseMetadata.create()
+            if (mockEntity != null) {
+                mockEntity.id = inverseEntity.id
+            } 
+            relation.setEntityValue(cachedEntity, mockEntity)
         }
     }
 

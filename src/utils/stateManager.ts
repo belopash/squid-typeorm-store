@@ -101,14 +101,14 @@ export class StateManager {
         switch (prevType) {
             case undefined:
                 this.setState(metadata, entity.id, ChangeType.Insert)
-                this.cacheMap.add(metadata, entity, true)
+                this.cacheMap.add(metadata, entity, {override: true, nullify: true})
                 break
             case ChangeType.Insert:
             case ChangeType.Upsert:
                 throw new Error(`Entity ${metadata.name} ${entity.id} is already marked as ${prevType}`)
             case ChangeType.Delete:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity, true)
+                this.cacheMap.add(metadata, entity, {override: true, nullify: true})
                 break
             default:
                 throw unexpectedCase(prevType)
@@ -120,14 +120,16 @@ export class StateManager {
         const prevType = this.getState(metadata, entity.id)
         switch (prevType) {
             case undefined:
-            case ChangeType.Insert:
             case ChangeType.Upsert:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity)
+                this.cacheMap.add(metadata, entity, {override: true})
+                break
+            case ChangeType.Insert:
+                this.cacheMap.add(metadata, entity, {override: true})
                 break
             case ChangeType.Delete:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity, true)
+                this.cacheMap.add(metadata, entity, {nullify: true, override: true})
                 break
             default:
                 throw unexpectedCase(prevType)
@@ -152,15 +154,14 @@ export class StateManager {
         }
     }
 
-    persist(target: EntityTarget<any>, entity: EntityLiteral) {
+    persist(target: EntityTarget<any>, entity: EntityLiteral | string) {
         const metadata = this.connection.getMetadata(target)
-        this.getChanges(metadata).delete(entity.id) // reset state
-        this.cacheMap.add(metadata, entity)
-    }
-
-    settle(target: EntityTarget<any>, id: string) {
-        const metadata = this.connection.getMetadata(target)
-        this.cacheMap.settle(metadata, id)
+        if (typeof entity === 'string') {
+            this.cacheMap.settle(metadata, entity)
+        } else {
+            this.getChanges(metadata).delete(entity.id) // reset state
+            this.cacheMap.add(metadata, entity)
+        }
     }
 
     isInserted(target: EntityTarget<any>, id: string) {

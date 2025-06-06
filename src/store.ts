@@ -457,7 +457,7 @@ export class Store {
         if (entityOrId == null) {
             return
         } else if (typeof entityOrId === 'string') {
-            this.state.settle(target, entityOrId)
+            this.state.persist(target, entityOrId)
         } else {
             traverseEntity(this.getEntityMetadata(target), entityOrId, (e, md) => this.state.persist(md.target, e))
         }
