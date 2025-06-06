@@ -13,18 +13,18 @@ export enum ChangeType {
     Delete = 'delete',
 }
 
-export type ChangeSets = {
-    upserts: {metadata: EntityMetadata; entities: EntityLiteral[]}[]
-    inserts: {metadata: EntityMetadata; entities: EntityLiteral[]}[]
-    deletes: {metadata: EntityMetadata; ids: string[]}[]
-    extraUpserts: {metadata: EntityMetadata; entities: EntityLiteral[]}[]
-}
+export type InsertChangeSet = {type: ChangeType.Insert; metadata: EntityMetadata; entities: EntityLiteral[]}
+export type UpsertChangeSet = {type: ChangeType.Upsert; metadata: EntityMetadata; entities: EntityLiteral[]}
+export type DeleteChangeSet = {type: ChangeType.Delete; metadata: EntityMetadata; ids: string[]}
+
+export type ChangeSet = InsertChangeSet | UpsertChangeSet | DeleteChangeSet
 
 export class StateManager {
     protected connection: DataSource
     protected cacheMap: CacheMap
     protected stateMap: Map<EntityMetadata, Map<string, ChangeType>>
     protected commitOrder: EntityMetadata[]
+    protected commitOrderMap: Map<EntityMetadata, number>
     protected logger?: Logger
 
     constructor({connection, logger}: {connection: DataSource; logger?: Logger}) {
@@ -33,6 +33,11 @@ export class StateManager {
         this.cacheMap = new CacheMap(this.logger?.child('cache'))
         this.stateMap = new Map()
         this.commitOrder = getMetadatasInCommitOrder(connection)
+        // Pre-compute commit order indices for O(1) lookup
+        this.commitOrderMap = new Map()
+        this.commitOrder.forEach((metadata, index) => {
+            this.commitOrderMap.set(metadata, index)
+        })
     }
 
     get<E extends EntityLiteral>(
@@ -135,11 +140,8 @@ export class StateManager {
         switch (prevType) {
             case undefined:
             case ChangeType.Upsert:
-                this.setState(metadata, id, ChangeType.Delete)
-                this.cacheMap.delete(metadata, id)
-                break
             case ChangeType.Insert:
-                this.getChanges(metadata).delete(id)
+                this.setState(metadata, id, ChangeType.Delete)
                 this.cacheMap.delete(metadata, id)
                 break
             case ChangeType.Delete:
@@ -187,22 +189,22 @@ export class StateManager {
         this.cacheMap.clear()
     }
 
-    async performUpdate(cb: (cs: ChangeSets) => Promise<void>) {
-        const changeSets: ChangeSets = {
-            inserts: [],
-            upserts: [],
-            deletes: [],
-            extraUpserts: [],
-        }
+    async performUpdate(cb: (cs: ChangeSet[]) => Promise<void>) {
+        const inserts: ChangeSet[] = []
+        const upserts: ChangeSet[] = []
+        const deletes: ChangeSet[] = []
+        const extraUpserts: ChangeSet[] = []
 
         for (const metadata of this.commitOrder) {
             const entityChanges = this.stateMap.get(metadata)
             if (entityChanges == null || entityChanges.size == 0) continue
 
-            const inserts: EntityLiteral[] = []
-            const upserts: EntityLiteral[] = []
-            const deletes: string[] = []
-            const extraUpserts: EntityLiteral[] = []
+            const changes = {
+                inserts: [] as EntityLiteral[],
+                upserts: [] as EntityLiteral[],
+                deletes: [] as string[],
+                extraUpserts: [] as EntityLiteral[],
+            }
 
             for (const [id, type] of entityChanges) {
                 const cached = this.cacheMap.get(metadata, id)
@@ -210,88 +212,89 @@ export class StateManager {
                 switch (type) {
                     case ChangeType.Insert: {
                         assert(cached?.value != null, `unable to insert entity ${metadata.name} ${id}`)
+                        const {entity, extraUpsert} = this.processEntityRelations(cached.value, ChangeType.Insert)
 
-                        const {entity, extraUpsert} = this.extractExtraUpsert(cached.value)
-                        inserts.push(entity)
+                        changes.inserts.push(entity)
                         if (extraUpsert != null) {
-                            extraUpserts.push(extraUpsert)
+                            changes.extraUpserts.push(extraUpsert)
                         }
-
                         break
                     }
                     case ChangeType.Upsert: {
                         assert(cached?.value != null, `unable to upsert entity ${metadata.name} ${id}`)
+                        const {entity, extraUpsert} = this.processEntityRelations(cached.value, ChangeType.Upsert)
 
-                        const {entity, extraUpsert} = this.extractExtraUpsert(cached.value)
-                        upserts.push(entity)
+                        changes.upserts.push(entity)
                         if (extraUpsert != null) {
-                            extraUpserts.push(extraUpsert)
+                            changes.extraUpserts.push(extraUpsert)
                         }
-
                         break
                     }
                     case ChangeType.Delete: {
-                        deletes.push(id)
+                        changes.deletes.push(id)
                         break
                     }
                 }
             }
 
-            if (upserts.length) {
-                changeSets.upserts.push({metadata, entities: upserts})
+            if (changes.inserts.length > 0) {
+                inserts.push({ type: ChangeType.Insert, metadata, entities: changes.inserts });
             }
-
-            if (inserts.length) {
-                changeSets.inserts.push({metadata, entities: inserts})
+            if (changes.upserts.length > 0) {
+                upserts.push({ type: ChangeType.Upsert, metadata, entities: changes.upserts });
             }
-
-            if (deletes.length) {
-                changeSets.deletes.push({metadata, ids: deletes})
+            if (changes.deletes.length > 0) {
+                deletes.push({ type: ChangeType.Delete, metadata, ids: changes.deletes });
             }
-
-            if (extraUpserts.length) {
-                changeSets.extraUpserts.push({metadata, entities: extraUpserts})
+            if (changes.extraUpserts.length > 0) {
+                extraUpserts.push({ type: ChangeType.Upsert, metadata, entities: changes.extraUpserts });
             }
         }
 
-        await cb(changeSets)
+        await cb([...inserts, ...upserts, ...deletes, ...extraUpserts])
 
         this.stateMap.clear()
     }
 
-    private extractExtraUpsert<E extends EntityLiteral>(entity: E) {
+    private processEntityRelations(entity: EntityLiteral, changeType: ChangeType) {
         const metadata = this.connection.getMetadata(entity.constructor)
-        const commitOrderIndex = this.commitOrder.indexOf(metadata)
+        const commitOrderIndex = this.commitOrderMap.get(metadata) ?? -1
 
-        let extraUpsert: E | undefined
+        let result = entity
+        let extraUpsert: EntityLiteral | undefined
+
         for (const relation of metadata.relations) {
             if (relation.foreignKeys.length == 0) continue
 
-            const inverseEntity = relation.getEntityValue(entity)
-            if (inverseEntity == null) continue
-
             const inverseMetadata = relation.inverseEntityMetadata
-            if (metadata === inverseMetadata && inverseEntity.id === entity.id) continue
+            if (metadata === inverseMetadata) continue
 
-            const invCommitOrderIndex = this.commitOrder.indexOf(inverseMetadata)
-            if (invCommitOrderIndex < commitOrderIndex) continue
+            const inverseEntity = relation.getEntityValue(entity)
+            if (inverseEntity == null || inverseEntity.id === entity.id) continue
+
+            const invCommitOrderIndex = this.commitOrderMap.get(inverseMetadata)!
 
             const isInverseInserted = this.isInserted(inverseMetadata.target, inverseEntity.id)
-            if (!isInverseInserted) continue
+            const isInverseUpserted = this.isUpserted(inverseMetadata.target, inverseEntity.id)
+
+            let shouldProcess = false
+            if (changeType === ChangeType.Insert) {
+                shouldProcess = isInverseUpserted || (isInverseInserted && invCommitOrderIndex > commitOrderIndex)
+            } else if (changeType === ChangeType.Upsert) {
+                shouldProcess = isInverseUpserted && invCommitOrderIndex > commitOrderIndex
+            }
+            if (!shouldProcess) continue
 
             if (extraUpsert == null) {
-                extraUpsert = entity
-                entity = metadata.create() as E
-                Object.assign(entity, extraUpsert)
+                extraUpsert = result
+                result = metadata.create() as EntityLiteral
+                Object.assign(result, extraUpsert)
             }
 
-            relation.setEntityValue(entity, undefined)
+            relation.setEntityValue(result, undefined)
         }
 
-        return {
-            entity,
-            extraUpsert,
-        }
+        return {entity: result, extraUpsert}
     }
 
     private setState(metadata: EntityMetadata, id: string, type: ChangeType): this {

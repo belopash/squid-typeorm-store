@@ -1,6 +1,6 @@
 {
     "name": "@belopash/typeorm-store",
-    "version": "1.6.0-rc.6",
+    "version": "1.6.0-rc.11",
     "description": "Optimized TypeORM based storage for squid mappings",
     "repository": {
         "url": "https://github.com/belopash/squid-typeorm-store"
@@ -27,7 +27,7 @@
         "@subsquid/typeorm-config": "^4",
         "@subsquid/typeorm-store": "^1",
         "pg": "^8.11.3",
-        "typeorm": "^0.3.16"
+        "typeorm": "^0.3.20"
     },
     "devDependencies": {
         "@types/mocha": "^10.0.10",

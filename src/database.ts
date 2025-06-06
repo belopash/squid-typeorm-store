@@ -39,6 +39,18 @@ export interface TypeormDatabaseOptions extends TypeormDatabaseOptions_ {
      * @default true
      */
     resetOnCommit?: boolean
+
+    /**
+     * Batch size for database operations
+     * @default 1000
+     */
+    batchSize?: number
+
+    /**
+     * Enable relation processing optimizations
+     * @default true
+     */
+    optimizeRelations?: boolean
 }
 
 const StateManagerSymbol = Symbol('StateManager')

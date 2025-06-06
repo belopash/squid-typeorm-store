@@ -8,7 +8,7 @@ import {
 } from 'typeorm'
 import {EntityTarget} from 'typeorm/common/EntityTarget'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
-import {StateManager} from './utils/stateManager'
+import {ChangeType, StateManager} from './utils/stateManager'
 import {Logger} from '@subsquid/logger'
 import {createFuture, Future} from '@subsquid/util-internal'
 import {EntityLiteral, noNull, splitIntoBatches, traverseEntity} from './utils/misc'
@@ -400,21 +400,19 @@ export class Store {
 
         this.pendingCommit = createFuture()
         try {
-            await this.state.performUpdate(async ({upserts, inserts, deletes, extraUpserts}) => {
-                for (const {metadata, entities} of upserts) {
-                    await this._upsert(metadata, entities)
-                }
-
-                for (const {metadata, entities} of inserts) {
-                    await this._insert(metadata, entities)
-                }
-
-                for (const {metadata, ids} of deletes) {
-                    await this._delete(metadata, ids)
-                }
-
-                for (const {metadata, entities} of extraUpserts) {
-                    await this._upsert(metadata, entities)
+            await this.state.performUpdate(async (changeSets) => {
+                for (const cs of changeSets) {
+                    switch (cs.type) {
+                        case ChangeType.Upsert:
+                            await this._upsert(cs.metadata, cs.entities)
+                            break
+                        case ChangeType.Insert:
+                            await this._insert(cs.metadata, cs.entities)
+                            break
+                        case ChangeType.Delete:
+                            await this._delete(cs.metadata, cs.ids)
+                            break
+                    }
                 }
             })
         } finally {
