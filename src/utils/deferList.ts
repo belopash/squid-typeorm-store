@@ -24,6 +24,11 @@ export class DeferList {
         }
     }
 
+    remove(metadata: EntityMetadata, id: string) {
+        const data = this.getData(metadata)
+        data.ids.delete(id)
+    }
+
     values(): Map<EntityMetadata, DeferData> {
         return new Map(this.map)
     }

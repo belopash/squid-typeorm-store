@@ -239,16 +239,16 @@ export class StateManager {
             }
 
             if (changes.inserts.length > 0) {
-                inserts.push({ type: ChangeType.Insert, metadata, entities: changes.inserts });
+                inserts.push({type: ChangeType.Insert, metadata, entities: changes.inserts})
             }
             if (changes.upserts.length > 0) {
-                upserts.push({ type: ChangeType.Upsert, metadata, entities: changes.upserts });
+                upserts.push({type: ChangeType.Upsert, metadata, entities: changes.upserts})
             }
             if (changes.deletes.length > 0) {
-                deletes.push({ type: ChangeType.Delete, metadata, ids: changes.deletes });
+                deletes.push({type: ChangeType.Delete, metadata, ids: changes.deletes})
             }
             if (changes.extraUpserts.length > 0) {
-                extraUpserts.push({ type: ChangeType.Upsert, metadata, entities: changes.extraUpserts });
+                extraUpserts.push({type: ChangeType.Upsert, metadata, entities: changes.extraUpserts})
             }
         }
 
@@ -280,9 +280,9 @@ export class StateManager {
 
             let shouldProcess = false
             if (changeType === ChangeType.Insert) {
-                shouldProcess = isInverseUpserted || (isInverseInserted && invCommitOrderIndex > commitOrderIndex)
+                shouldProcess = isInverseUpserted || (isInverseInserted && invCommitOrderIndex >= commitOrderIndex)
             } else if (changeType === ChangeType.Upsert) {
-                shouldProcess = isInverseUpserted && invCommitOrderIndex > commitOrderIndex
+                shouldProcess = isInverseUpserted && invCommitOrderIndex >= commitOrderIndex
             }
             if (!shouldProcess) continue
 

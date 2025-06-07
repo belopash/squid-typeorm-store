@@ -42,27 +42,6 @@ export function mergeRelations<E extends ObjectLiteral>(
     return mergedObject
 }
 
-export function traverseEntity(
-    metadata: EntityMetadata,
-    entity: EntityLiteral,
-    cb: (e: EntityLiteral, metadata: EntityMetadata) => void
-) {
-    for (const relation of metadata.relations) {
-        const inverseEntity = relation.getEntityValue(entity)
-        if (inverseEntity == null) continue
-
-        if (relation.isOneToMany || relation.isManyToMany) {
-            for (const ie of inverseEntity) {
-                traverseEntity(relation.inverseEntityMetadata, ie, cb)
-            }
-        } else {
-            traverseEntity(relation.inverseEntityMetadata, inverseEntity, cb)
-        }
-    }
-
-    cb(entity, metadata)
-}
-
 export function noNull<T>(val: null | undefined | T): T | undefined {
     return val == null ? undefined : val
 }

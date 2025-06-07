@@ -12,7 +12,7 @@ import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {ChangeType, StateManager} from './utils/stateManager'
 import {Logger} from '@subsquid/logger'
 import {createFuture, Future} from '@subsquid/util-internal'
-import {EntityLiteral, noNull, splitIntoBatches, traverseEntity} from './utils/misc'
+import {EntityLiteral, noNull, splitIntoBatches} from './utils/misc'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import assert from 'assert'
 import {EntityClass} from '@subsquid/typeorm-store'
@@ -87,7 +87,7 @@ export class Store {
     protected postponeWriteOperations: boolean
     protected cacheEntities: boolean
 
-    protected pendingCommit?: Future<void>
+    protected pendingSync?: Future<void>
     protected pendingLoad?: Future<void>
     protected isClosed = false
 
@@ -116,22 +116,22 @@ export class Store {
         await this.pendingLoad?.promise()
 
         this.pendingLoad = createFuture()
-
         try {
             const defers = this.defers.values()
 
             for (const [metadata, data] of defers) {
+                if (data.ids.size == 0) continue
                 const ids = Array.from(data.ids)
 
-                for (let batch of splitIntoBatches(ids, 30000)) {
-                    if (batch.length == 0) continue
-                    await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
-                }
+                await Promise.all(
+                    Array.from(splitIntoBatches(ids, 30000)).map((b) =>
+                        this.find<any>(metadata.target, {where: {id: In(b)}, relations: data.relations})
+                    )
+                )
 
                 for (const id of ids) {
                     this.state.persist(metadata.target, id)
                 }
-
             }
 
             this.defers.clear()
@@ -199,9 +199,9 @@ export class Store {
     }
 
     private async upsertMany(target: EntityTarget<any>, entities: EntityLiteral[]) {
-        for (let b of splitIntoBatches(entities, 1000)) {
-            await this.em.upsert(target, b as any, ['id'])
-        }
+        await Promise.all(
+            Array.from(splitIntoBatches(entities, 1000)).map((b) => this.em.upsert(target, b as any, ['id']))
+        )
     }
 
     /**
@@ -228,9 +228,7 @@ export class Store {
     }
 
     private async insertMany(target: EntityTarget<any>, entities: EntityLiteral[]) {
-        for (let b of splitIntoBatches(entities, 1000)) {
-            await this.em.insert(target, b)
-        }
+        await Promise.all(Array.from(splitIntoBatches(entities, 1000)).map((b) => this.em.insert(target, b)))
     }
 
     /**
@@ -276,9 +274,7 @@ export class Store {
     }
 
     private async deleteMany(target: EntityTarget<any>, ids: string[]) {
-        for (let b of splitIntoBatches(ids, 50000)) {
-            await this.em.delete(target, b)
-        }
+        await Promise.all(Array.from(splitIntoBatches(ids, 50000)).map((b) => this.em.delete(target, b)))
     }
 
     async count<E extends EntityLiteral>(target: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
@@ -426,9 +422,8 @@ export class Store {
     }
 
     async sync(): Promise<void> {
-        await this.pendingCommit?.promise()
-
-        this.pendingCommit = createFuture()
+        await this.pendingSync?.promise()
+        this.pendingSync = createFuture()
         try {
             await this.state.performUpdate(async (changeSets) => {
                 for (const cs of changeSets) {
@@ -446,8 +441,8 @@ export class Store {
                 }
             })
         } finally {
-            this.pendingCommit.resolve()
-            this.pendingCommit = undefined
+            this.pendingSync.resolve()
+            this.pendingSync = undefined
         }
     }
 
@@ -464,7 +459,7 @@ export class Store {
 
     private async performWrite(cb: () => Promise<void>): Promise<void> {
         this.assertNotClosed()
-        await this.pendingCommit?.promise()
+        await this.pendingSync?.promise()
         await cb()
         if (!this.postponeWriteOperations) {
             await this.sync()
@@ -476,17 +471,35 @@ export class Store {
     }
 
     private cacheEntity<E extends EntityLiteral>(target: EntityTarget<E>, entityOrId?: E | string) {
-        if (entityOrId == null) {
-            return
-        } else if (typeof entityOrId === 'string') {
+        if (entityOrId == null) return
+
+        if (typeof entityOrId === 'string') {
             this.state.persist(target, entityOrId)
         } else {
-            traverseEntity(this.getEntityMetadata(target), entityOrId, (e, md) => this.state.persist(md.target, e))
+            this.traverseEntity(entityOrId, (e, md) => this.state.persist(md.target, e))
         }
     }
 
     private getEntityMetadata(target: EntityTarget<any>) {
         return this.em.connection.getMetadata(target)
+    }
+
+    private traverseEntity(entity: EntityLiteral, cb: (e: EntityLiteral, metadata: EntityMetadata) => void) {
+        const metadata = this.getEntityMetadata(entity.constructor)
+        for (const relation of metadata.relations) {
+            const inverseEntity = relation.getEntityValue(entity)
+            if (inverseEntity == null) continue
+
+            if (relation.isOneToMany || relation.isManyToMany) {
+                for (const ie of inverseEntity) {
+                    this.traverseEntity(ie, cb)
+                }
+            } else {
+                this.traverseEntity(inverseEntity, cb)
+            }
+        }
+
+        cb(entity, metadata)
     }
 }
 
@@ -503,11 +516,7 @@ function getIdFromWhere(where?: FindOptionsWhere<EntityLiteral>) {
 }
 
 export class DeferredEntity<E extends EntityLiteral> {
-    constructor(
-        readonly target: EntityTarget<E>,
-        readonly opts: GetOptions<E>,
-        private store: Store
-    ) {}
+    constructor(readonly target: EntityTarget<E>, readonly opts: GetOptions<E>, private store: Store) {}
 
     async get(): Promise<E | undefined> {
         return this.store.get(this.target, this.opts)
