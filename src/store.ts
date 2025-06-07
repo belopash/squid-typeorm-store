@@ -11,12 +11,12 @@ import {EntityTarget} from 'typeorm/common/EntityTarget'
 import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {ChangeType, StateManager} from './utils/stateManager'
 import {Logger} from '@subsquid/logger'
-import {createFuture, Future} from '@subsquid/util-internal'
 import {EntityLiteral, noNull, splitIntoBatches} from './utils/misc'
 import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import assert from 'assert'
 import {EntityClass} from '@subsquid/typeorm-store'
 import {DeferList} from './utils/deferList'
+import {Mutex} from './utils/mutex'
 
 export {EntityTarget, EntityLiteral}
 
@@ -87,8 +87,8 @@ export class Store {
     protected postponeWriteOperations: boolean
     protected cacheEntities: boolean
 
-    protected pendingSync?: Future<void>
-    protected pendingLoad?: Future<void>
+    protected pendingSync: Mutex
+    protected pendingLoad: Mutex
     protected isClosed = false
 
     constructor({em, changes, logger, state, ...opts}: StoreOptions) {
@@ -99,6 +99,8 @@ export class Store {
         this.postponeWriteOperations = opts.postponeWriteOperations
         this.cacheEntities = opts.cacheEntities
         this.defers = new DeferList(this.logger?.child('defer'))
+        this.pendingSync = new Mutex()
+        this.pendingLoad = new Mutex()
     }
 
     defer<E extends EntityLiteral>(target: EntityTarget<E>, id: string): DeferredEntity<E>
@@ -113,10 +115,13 @@ export class Store {
     }
 
     private async load(): Promise<void> {
-        await this.pendingLoad?.promise()
+        // no need to acquire lock if there are no defers
+        if (this.defers.isEmpty()) return
 
-        this.pendingLoad = createFuture()
+        await this.pendingLoad.acquire()
         try {
+            // check again in case some defers were cleared after the lock was acquired
+            if (this.defers.isEmpty()) return
             const defers = this.defers.values()
 
             for (const [metadata, data] of defers) {
@@ -136,8 +141,7 @@ export class Store {
 
             this.defers.clear()
         } finally {
-            this.pendingLoad.resolve()
-            this.pendingLoad = undefined
+            this.pendingLoad.release()
         }
     }
 
@@ -154,7 +158,7 @@ export class Store {
      * It always executes a primitive operation without cascades, relations, etc.
      */
     async upsert<E extends EntityLiteral>(e: E | E[]): Promise<void> {
-        return await this.performWrite(async () => {
+        return await this.performWrite(() => {
             let entities = Array.isArray(e) ? e : [e]
             if (entities.length == 0) return
 
@@ -211,7 +215,7 @@ export class Store {
      * Executes a primitive INSERT operation without cascades, relations, etc.
      */
     async insert<E extends EntityLiteral>(e: E | E[]): Promise<void> {
-        return await this.performWrite(async () => {
+        return await this.performWrite(() => {
             const entities = Array.isArray(e) ? e : [e]
             if (entities.length == 0) return
 
@@ -239,7 +243,7 @@ export class Store {
     async delete<E extends EntityLiteral>(e: E | E[]): Promise<void>
     async delete<E extends EntityLiteral>(target: EntityTarget<E>, id: string | string[]): Promise<void>
     async delete<E extends EntityLiteral>(e: E | E[] | EntityTarget<E>, id?: string | string[]): Promise<void> {
-        return await this.performWrite(async () => {
+        return await this.performWrite(() => {
             if (id == null) {
                 const entities = Array.isArray(e) ? e : [e as E]
                 if (entities.length == 0) return
@@ -422,8 +426,10 @@ export class Store {
     }
 
     async sync(): Promise<void> {
-        await this.pendingSync?.promise()
-        this.pendingSync = createFuture()
+        // no need to acquire lock if there are no changes
+        if (this.state.isEmpty()) return
+
+        await this.pendingSync.acquire()
         try {
             await this.state.performUpdate(async (changeSets) => {
                 for (const cs of changeSets) {
@@ -441,8 +447,7 @@ export class Store {
                 }
             })
         } finally {
-            this.pendingSync.resolve()
-            this.pendingSync = undefined
+            this.pendingSync.release()
         }
     }
 
@@ -457,10 +462,10 @@ export class Store {
         return await cb()
     }
 
-    private async performWrite(cb: () => Promise<void>): Promise<void> {
+    private async performWrite(cb: () => void): Promise<void> {
+        await this.pendingSync.wait()
         this.assertNotClosed()
-        await this.pendingSync?.promise()
-        await cb()
+        cb()
         if (!this.postponeWriteOperations) {
             await this.sync()
         }

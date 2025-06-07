@@ -190,7 +190,13 @@ export class StateManager {
         this.cacheMap.clear()
     }
 
+    isEmpty(): boolean {
+        return this.stateMap.size === 0
+    }
+
     async performUpdate(cb: (cs: ChangeSet[]) => Promise<void>) {
+        if (this.isEmpty()) return
+
         const inserts: ChangeSet[] = []
         const upserts: ChangeSet[] = []
         const deletes: ChangeSet[] = []

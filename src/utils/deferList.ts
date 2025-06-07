@@ -38,6 +38,10 @@ export class DeferList {
         this.map.clear()
     }
 
+    isEmpty(): boolean {
+        return this.map.size === 0
+    }
+
     private getData(metadata: EntityMetadata) {
         let list = this.map.get(metadata)
         if (list == null) {
