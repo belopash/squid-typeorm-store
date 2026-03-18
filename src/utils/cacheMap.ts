@@ -1,7 +1,7 @@
 import {EntityMetadata} from 'typeorm'
 import {EntityLiteral} from './misc'
-import {Logger} from '@subsquid/logger'
 import clone from 'fast-copy'
+import {Logger} from '@subsquid/logger'
 
 export class CachedEntity<E extends EntityLiteral = EntityLiteral> {
     constructor(public value: E | null = null) {}

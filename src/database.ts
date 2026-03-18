@@ -1,12 +1,11 @@
 import {createLogger} from '@subsquid/logger'
 import {
-    TypeormDatabase as TypeormDatabase_,
     TypeormDatabaseOptions as TypeormDatabaseOptions_,
     IsolationLevel,
 } from '@subsquid/typeorm-store'
 import {ChangeTracker, rollbackBlock} from '@subsquid/typeorm-store/lib/hot'
 import {DatabaseState, FinalTxInfo, HashAndHeight, HotTxInfo} from '@subsquid/typeorm-store/lib/interfaces'
-import {assertNotNull, def, last, maybeLast} from '@subsquid/util-internal'
+import {assertNotNull, def, maybeLast} from '@subsquid/util-internal'
 import assert from 'assert'
 import {DataSource, EntityManager} from 'typeorm'
 import {Store} from './store'
@@ -63,10 +62,7 @@ export class TypeormDatabase {
     async connect(): Promise<DatabaseState> {
         assert(this.con == null, 'already connected')
 
-        let cfg = createOrmConfig({projectDir: this.projectDir})
-        this.con = new DataSource(cfg)
-
-        await this.con.initialize()
+        this.con = await this.initializeDataSource()
 
         try {
             return await this.con.transaction('SERIALIZABLE', (em) => this.initTransaction(em))
@@ -77,9 +73,14 @@ export class TypeormDatabase {
         }
     }
 
+    protected async initializeDataSource(): Promise<DataSource> {
+        const cfg = createOrmConfig({projectDir: this.projectDir})
+        const connection = new DataSource(cfg)
+        return connection.initialize()
+    }
+
     async disconnect(): Promise<void> {
-        await this.con?.destroy().catch(() => {}) // ignore error
-        this.con = undefined
+        await this.con?.destroy().finally(() => this.con = undefined)
     }
 
     private async initTransaction(em: EntityManager): Promise<DatabaseState> {
@@ -179,27 +180,26 @@ export class TypeormDatabase {
             assertChainContinuity(info.baseHead, info.newBlocks)
             assert(info.finalizedHead.height <= (maybeLast(info.newBlocks) ?? info.baseHead).height)
 
-            assert(
-                chain.find((b) => b.hash === info.baseHead.hash),
-                RACE_MSG
-            )
+            let baseHeadPos = chain.findIndex((b) => b.hash === info.baseHead.hash)
+            assert(baseHeadPos >= 0, RACE_MSG)
             if (info.newBlocks.length == 0) {
-                assert(last(chain).hash === info.baseHead.hash, RACE_MSG)
+                assert(baseHeadPos === chain.length - 1, RACE_MSG)
             }
             assert(chain[0].height <= info.finalizedHead.height, RACE_MSG)
 
-            let rollbackPos = info.baseHead.height + 1 - chain[0].height
+            let rollbackPos = baseHeadPos + 1
 
             for (let i = chain.length - 1; i >= rollbackPos; i--) {
                 await rollbackBlock(this.statusSchema, em, chain[i].height)
             }
 
             if (info.newBlocks.length) {
-                let finalizedEnd = info.finalizedHead.height - info.newBlocks[0].height + 1
+                let finalizedEnd = info.newBlocks.findIndex((b) => b.height > info.finalizedHead.height)
+                if (finalizedEnd < 0) {
+                    finalizedEnd = info.newBlocks.length
+                }
                 if (finalizedEnd > 0) {
                     await this.performUpdates((store) => cb(store, 0, finalizedEnd), em)
-                } else {
-                    finalizedEnd = 0
                 }
                 for (let i = finalizedEnd; i < info.newBlocks.length; i++) {
                     let b = info.newBlocks[i]
@@ -214,8 +214,6 @@ export class TypeormDatabase {
 
             chain = chain.slice(0, rollbackPos).concat(info.newBlocks)
 
-            let finalizedHeadPos = info.finalizedHead.height - chain[0].height
-            assert(chain[finalizedHeadPos].hash === info.finalizedHead.hash)
             await this.deleteHotBlocks(em, info.finalizedHead.height)
 
             await this.updateStatus(em, state.nonce, info.finalizedHead)
@@ -333,7 +331,7 @@ function assertStateInvariants(state: DatabaseState): DatabaseState {
 function assertChainContinuity(base: HashAndHeight, chain: HashAndHeight[]) {
     let prev = base
     for (let b of chain) {
-        assert(b.height === prev.height + 1, 'blocks must form a continues chain')
+        assert(b.height > prev.height, 'blocks must form a continues chain')
         prev = b
     }
 }
