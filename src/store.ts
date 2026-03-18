@@ -126,13 +126,11 @@ export class Store {
 
             for (const [metadata, data] of defers) {
                 if (data.ids.size == 0) continue
-                const ids = Array.from(data.ids)
+                const ids = [...data.ids]
 
-                await Promise.all(
-                    Array.from(splitIntoBatches(ids, 30000)).map((b) =>
-                        this.find<any>(metadata.target, {where: {id: In(b)}, relations: data.relations})
-                    )
-                )
+                for (const batch of splitIntoBatches(ids, 30000)) {
+                    await this.find<any>(metadata.target, {where: {id: In(batch)}, relations: data.relations})
+                }
 
                 for (const id of ids) {
                     this.state.persist(metadata.target, id)
@@ -183,29 +181,25 @@ export class Store {
 
         let fk = metadata.columns.filter((c) => c.relationMetadata)
         if (fk.length == 0) return this.upsertMany(metadata.target, entities)
-        let signatures = entities
-            .map((e) => ({entity: e, value: this.getFkSignature(fk, e)}))
-            .sort((a, b) => (a.value > b.value ? -1 : b.value > a.value ? 1 : 0))
-        let currentSignature = signatures[0].value
-        let batch: EntityLiteral[] = []
-        for (let s of signatures) {
-            if (s.value === currentSignature) {
-                batch.push(s.entity)
-            } else {
-                await this.upsertMany(metadata.target, batch)
-                currentSignature = s.value
-                batch = [s.entity]
+        const groups = new Map<bigint, EntityLiteral[]>()
+        for (const e of entities) {
+            const sig = this.getFkSignature(fk, e)
+            let group = groups.get(sig)
+            if (group == null) {
+                group = []
+                groups.set(sig, group)
             }
+            group.push(e)
         }
-        if (batch.length) {
-            await this.upsertMany(metadata.target, batch)
+        for (const group of groups.values()) {
+            await this.upsertMany(metadata.target, group)
         }
     }
 
     private async upsertMany(target: EntityTarget<any>, entities: EntityLiteral[]) {
-        await Promise.all(
-            Array.from(splitIntoBatches(entities, 1000)).map((b) => this.em.upsert(target, b as any, ['id']))
-        )
+        for (const batch of splitIntoBatches(entities, 1000)) {
+            await this.em.upsert(target, batch as any, ['id'])
+        }
     }
 
     /**
@@ -232,7 +226,9 @@ export class Store {
     }
 
     private async insertMany(target: EntityTarget<any>, entities: EntityLiteral[]) {
-        await Promise.all(Array.from(splitIntoBatches(entities, 1000)).map((b) => this.em.insert(target, b)))
+        for (const batch of splitIntoBatches(entities, 1000)) {
+            await this.em.insert(target, batch)
+        }
     }
 
     /**
@@ -278,7 +274,9 @@ export class Store {
     }
 
     private async deleteMany(target: EntityTarget<any>, ids: string[]) {
-        await Promise.all(Array.from(splitIntoBatches(ids, 50000)).map((b) => this.em.delete(target, b)))
+        for (const batch of splitIntoBatches(ids, 50000)) {
+            await this.em.delete(target, batch)
+        }
     }
 
     async count<E extends EntityLiteral>(target: EntityTarget<E>, options?: FindManyOptions<E>): Promise<number> {
@@ -516,7 +514,10 @@ function parseGetOptions<E>(idOrOptions: string | GetOptions<E>): GetOptions<E> 
     }
 }
 
-function getIdFromWhere(where?: FindOptionsWhere<EntityLiteral>) {
+function getIdFromWhere(where?: FindOptionsWhere<EntityLiteral> | FindOptionsWhere<EntityLiteral>[]): string | undefined {
+    if (Array.isArray(where)) {
+        return where.length === 1 ? getIdFromWhere(where[0]) : undefined
+    }
     return typeof where?.id === 'string' ? where.id : undefined
 }
 

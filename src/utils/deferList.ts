@@ -29,8 +29,8 @@ export class DeferList {
         data.ids.delete(id)
     }
 
-    values(): Map<EntityMetadata, DeferData> {
-        return new Map(this.map)
+    values(): IterableIterator<[EntityMetadata, DeferData]> {
+        return this.map.entries()
     }
 
     clear(): void {

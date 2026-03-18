@@ -197,20 +197,26 @@ export class StateManager {
     async performUpdate(cb: (cs: ChangeSet[]) => Promise<void>) {
         if (this.isEmpty()) return
 
-        const inserts: ChangeSet[] = []
-        const upserts: ChangeSet[] = []
-        const deletes: ChangeSet[] = []
-        const extraUpserts: ChangeSet[] = []
+        type PendingChanges = {
+            metadata: EntityMetadata
+            inserts: EntityLiteral[]
+            upserts: EntityLiteral[]
+            deletes: string[]
+            extraUpserts: EntityLiteral[]
+        }
+
+        const pending: PendingChanges[] = []
 
         for (const metadata of this.commitOrder) {
             const entityChanges = this.stateMap.get(metadata)
             if (entityChanges == null || entityChanges.size == 0) continue
 
-            const changes = {
-                inserts: [] as EntityLiteral[],
-                upserts: [] as EntityLiteral[],
-                deletes: [] as string[],
-                extraUpserts: [] as EntityLiteral[],
+            const changes: PendingChanges = {
+                metadata,
+                inserts: [],
+                upserts: [],
+                deletes: [],
+                extraUpserts: [],
             }
 
             for (const [id, type] of entityChanges) {
@@ -244,23 +250,34 @@ export class StateManager {
                 }
             }
 
-            if (changes.inserts.length > 0) {
-                inserts.push({type: ChangeType.Insert, metadata, entities: changes.inserts})
+            pending.push(changes)
+        }
+
+        const changeSets: ChangeSet[] = []
+        for (const c of pending) {
+            if (c.inserts.length > 0) {
+                changeSets.push({type: ChangeType.Insert, metadata: c.metadata, entities: c.inserts})
             }
-            if (changes.upserts.length > 0) {
-                upserts.push({type: ChangeType.Upsert, metadata, entities: changes.upserts})
+        }
+        for (const c of pending) {
+            if (c.upserts.length > 0) {
+                changeSets.push({type: ChangeType.Upsert, metadata: c.metadata, entities: c.upserts})
             }
-            if (changes.deletes.length > 0) {
-                deletes.push({type: ChangeType.Delete, metadata, ids: changes.deletes})
+        }
+        for (const c of pending) {
+            if (c.deletes.length > 0) {
+                changeSets.push({type: ChangeType.Delete, metadata: c.metadata, ids: c.deletes})
             }
-            if (changes.extraUpserts.length > 0) {
-                extraUpserts.push({type: ChangeType.Upsert, metadata, entities: changes.extraUpserts})
+        }
+        for (const c of pending) {
+            if (c.extraUpserts.length > 0) {
+                changeSets.push({type: ChangeType.Upsert, metadata: c.metadata, entities: c.extraUpserts})
             }
         }
 
-        await cb([...inserts, ...upserts, ...deletes, ...extraUpserts])
-
         this.stateMap.clear()
+
+        await cb(changeSets)
     }
 
     private processEntityRelations(entity: EntityLiteral, changeType: ChangeType) {
