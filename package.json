@@ -19,8 +19,10 @@
         "test": "npx mocha -r dotenv/config lib/test/*.test.js --exit --timeout 5000"
     },
     "dependencies": {
+        "@subsquid/typeorm-store": "^1",
         "@subsquid/util-internal": "^3.2.0",
-        "fast-copy": "^3.0.2"
+        "fast-copy": "^3.0.2",
+        "typeorm": "^0.3"
     },
     "peerDependencies": {
         "@subsquid/logger": "^1",
@@ -36,5 +38,6 @@
         "expect": "^29.7.0",
         "mocha": "^11.5.0",
         "typescript": "^5.4.5"
-    }
+    },
+    "packageManager": "yarn@1.22.22+sha512.a6b2f7906b721bba3d67d4aff083df04dad64c399707841b7acf00f6b133b7ac24255f2652fa22ae3534329dc6180534e98d17432037ff6fd140556e2bb3137e"
 }
