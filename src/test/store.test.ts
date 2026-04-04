@@ -103,6 +103,20 @@ describe('Store', function () {
         })
     })
 
+    describe('get cached null (non-existent entity)', function () {
+        useDatabase([
+            `CREATE TABLE item (id text primary key, name text)`,
+        ])
+
+        it('does not throw when getting a previously looked-up missing entity', async function () {
+            let store = await createStore()
+            // First call: DB miss — caches the ID as null sentinel
+            await expect(store.get(Item, '999')).resolves.toBeUndefined()
+            // Second call: state.get() returns null — must not throw
+            await expect(store.get(Item, '999')).resolves.toBeUndefined()
+        })
+    })
+
     describe('.track({ replace: true })', function () {
         useDatabase([
             `CREATE TABLE item (id text primary key , name text)`,

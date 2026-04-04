@@ -473,7 +473,7 @@ export class Store {
         }
     }
 
-    private touchReturnedGraph(entity: EntityLiteral): void {
+    private touchReturnedGraph(entity: EntityLiteral | null | undefined): void {
         this.traverseEntity(entity, (e) => this.state.touchEntity(e))
     }
 
@@ -481,7 +481,9 @@ export class Store {
         return this.em.connection.getMetadata(target)
     }
 
-    private traverseEntity(entity: EntityLiteral, cb: (e: EntityLiteral, metadata: EntityMetadata) => void) {
+    private traverseEntity(entity: EntityLiteral | null | undefined, cb: (e: EntityLiteral, metadata: EntityMetadata) => void) {
+        if (entity == null) return
+
         const metadata = this.getEntityMetadata(entity.constructor)
         for (const relation of metadata.relations) {
             const inverseEntity = relation.getEntityValue(entity)
