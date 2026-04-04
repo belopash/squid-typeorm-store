@@ -1,3 +1,6 @@
+# Publishes via npm trusted publishing (OIDC). Configure the publisher on npmjs.com
+# (package → Access → Trusted Publisher): repo belopash/squid-typeorm-store, workflow publish.yml.
+# Requires Node ≥22.14 and npm ≥11.5.1. Remove NPM_AUTH_TOKEN after verifying a successful run.
 name: publish
 on:
   workflow_dispatch: # manually run
@@ -10,9 +13,13 @@ on:
 env:
   CI: true
 
+permissions:
+  contents: read
+  id-token: write
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   publish:
@@ -23,25 +30,22 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Use Node.js
-        uses: actions/setup-node@v3
+        uses: actions/setup-node@v4
         with:
-          node-version: '18.x'
+          node-version: '22'
+          cache: npm
+          registry-url: https://registry.npmjs.org
 
-      - name: Authenticate with Registry
-        run: |
-          echo "always-auth=true" > .npmrc
-          echo "@subsquid:registry=https://registry.npmjs.org/" >> .npmrc
-          echo "registry=https://registry.npmjs.org/" >> .npmrc
-          echo "//registry.npmjs.org/:_authToken=$NPM_AUTH_TOKEN" >> .npmrc
-          npm whoami
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+      - name: Install npm (trusted publishing)
+        run: npm install -g npm@^11.5.1
 
-      - name: Install dependencies
+      - name: Configure git
         run: |
-          npm i
           git config --global user.name 'github-actions'
           git config --global user.email 'github-actions@github.com'
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build
         run: npm run build
@@ -49,11 +53,8 @@ jobs:
       - name: Verify package
         run: |
           npm pack --dry-run
-          npm run test || true
+          npm run test
 
+      # OIDC auth is automatic on GitHub-hosted runners; provenance is added by the registry.
       - name: Publish to npm
-        run: |
-          npm publish --tag $RELEASE_TAG --access public
-        env:
-          RELEASE_TAG: ${{ github.event.inputs.releaseTag }}
-        continue-on-error: false
+        run: npm publish --tag ${{ github.event.inputs.releaseTag }} --access public
