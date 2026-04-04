@@ -16,7 +16,8 @@
         "build": "rm -rf lib && tsc",
         "up": "docker-compose up -d 2>&1",
         "down": "docker-compose down -v 2>&1",
-        "test": "npx mocha -r dotenv/config lib/test/*.test.js --exit --timeout 5000"
+        "test": "npx mocha -r dotenv/config lib/test/*.test.js --exit --timeout 5000",
+        "bench": "node -r dotenv/config lib/test/bench.js"
     },
     "dependencies": {
         "@subsquid/util-internal": "^3.2.0"
