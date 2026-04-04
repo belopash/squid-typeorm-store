@@ -7,4 +7,5 @@ export {
     FindOneOptions,
     Store,
     Store as StoreWithCache,
+    TrackOptions,
 } from './store'

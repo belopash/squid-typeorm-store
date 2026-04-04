@@ -12,7 +12,7 @@ import {ChangeTracker} from '@subsquid/typeorm-store/lib/hot'
 import {ChangeType, StateManager} from './utils/stateManager'
 import {Logger} from '@subsquid/logger'
 import {EntityLiteral, noNull, splitIntoBatches} from './utils/misc'
-import {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
+import type {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import assert from 'assert'
 import {EntityClass} from '@subsquid/typeorm-store'
 import {DeferList} from './utils/deferList'
@@ -72,6 +72,13 @@ export interface StoreOptions {
     logger?: Logger
     postponeWriteOperations: boolean
     cacheEntities: boolean
+}
+
+export interface TrackOptions {
+    /**
+     * When `true`, register for SQL upsert (`ON CONFLICT` update). When omitted or `false`, register for `INSERT` only.
+     */
+    replace?: boolean
 }
 
 /**
@@ -144,24 +151,26 @@ export class Store {
     }
 
     /**
-     * Alias for {@link Store.upsert}
-     */
-    async save<E extends EntityLiteral>(e: E | E[]): Promise<void> {
-        return this.upsert(e)
-    }
-
-    /**
-     * Upserts a given entity or entities into the database.
+     * Registers entities for the next sync. By default flushes as primitive SQL `INSERT` (duplicate keys in the DB error).
      *
-     * It always executes a primitive operation without cascades, relations, etc.
+     * Rows loaded via {@link get} / {@link find} / {@link findOne} are **touched**; if they differ from the baseline
+     * captured at load time, they are upserted automatically on the next sync (no `replace` needed).
+     *
+     * Pass `{ replace: true }` to force upsert for the given instances (e.g. different object for the same id, or
+     * when you must queue an upsert without a prior read in the same batch).
      */
-    async upsert<E extends EntityLiteral>(e: E | E[]): Promise<void> {
+    async track<E extends EntityLiteral>(e: E | E[], options?: TrackOptions): Promise<void> {
         return await this.performWrite(() => {
             let entities = Array.isArray(e) ? e : [e]
             if (entities.length == 0) return
 
+            const replace = options?.replace === true
             for (const entity of entities) {
-                this.state.upsert(entity)
+                if (replace) {
+                    this.state.upsert(entity)
+                } else {
+                    this.state.insert(entity)
+                }
             }
         })
     }
@@ -200,23 +209,6 @@ export class Store {
         for (const batch of splitIntoBatches(entities, 1000)) {
             await this.em.upsert(target, batch as any, ['id'])
         }
-    }
-
-    /**
-     * Inserts a given entity or entities into the database.
-     * Does not check if the entity(s) exist in the database and will fail if a duplicate is inserted.
-     *
-     * Executes a primitive INSERT operation without cascades, relations, etc.
-     */
-    async insert<E extends EntityLiteral>(e: E | E[]): Promise<void> {
-        return await this.performWrite(() => {
-            const entities = Array.isArray(e) ? e : [e]
-            if (entities.length == 0) return
-
-            for (const entity of entities) {
-                this.state.insert(entity)
-            }
-        })
     }
 
     private async _insert(metadata: EntityMetadata, entities: EntityLiteral[]) {
@@ -300,6 +292,7 @@ export class Store {
             if (cacheEntities ?? this.cacheEntities) {
                 for (const e of res) {
                     this.cacheEntity(target, e)
+                    this.touchReturnedGraph(e)
                 }
             }
 
@@ -325,6 +318,9 @@ export class Store {
             if (cacheEntities ?? this.cacheEntities) {
                 const idOrEntity = res || getIdFromWhere(options.where)
                 this.cacheEntity(target, idOrEntity)
+                if (res != null) {
+                    this.touchReturnedGraph(res)
+                }
             }
 
             return res
@@ -366,7 +362,12 @@ export class Store {
         const {id, relations, cacheEntities} = parseGetOptions(idOrOptions)
 
         let entity = this.state.get<E>(target, id, relations)
-        if (entity !== undefined) return noNull(entity)
+        if (entity !== undefined) {
+            if (cacheEntities ?? this.cacheEntities) {
+                this.touchReturnedGraph(entity as EntityLiteral)
+            }
+            return noNull(entity)
+        }
 
         return await this.findOne(target, {where: {id} as any, relations, cacheEntities})
     }
@@ -382,17 +383,17 @@ export class Store {
         return e
     }
 
-    async getOrInsert<E extends EntityLiteral>(
+    async getOrCreate<E extends EntityLiteral>(
         target: EntityTarget<E>,
         id: string,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrInsert<E extends EntityLiteral>(
+    async getOrCreate<E extends EntityLiteral>(
         target: EntityTarget<E>,
         options: GetOptions<E>,
         create: (id: string) => E | Promise<E>
     ): Promise<E>
-    async getOrInsert<E extends EntityLiteral>(
+    async getOrCreate<E extends EntityLiteral>(
         target: EntityTarget<E>,
         idOrOptions: string | GetOptions<E>,
         create: (id: string) => E | Promise<E>
@@ -402,21 +403,10 @@ export class Store {
 
         if (e == null) {
             e = await create(options.id)
-            await this.insert(e)
+            await this.track(e)
         }
 
         return e
-    }
-
-    /**
-     * @deprecated use {@link getOrInsert} instead
-     */
-    async getOrCreate<E extends EntityLiteral>(
-        target: EntityTarget<E>,
-        idOrOptions: string | GetOptions<E>,
-        create: (id: string) => E | Promise<E>
-    ) {
-        return this.getOrInsert(target, idOrOptions as any, create)
     }
 
     reset(): void {
@@ -425,7 +415,7 @@ export class Store {
 
     async sync(): Promise<void> {
         // no need to acquire lock if there are no changes
-        if (this.state.isEmpty()) return
+        if (!this.state.needsSync()) return
 
         await this.pendingSync.acquire()
         try {
@@ -483,6 +473,10 @@ export class Store {
         }
     }
 
+    private touchReturnedGraph(entity: EntityLiteral): void {
+        this.traverseEntity(entity, (e) => this.state.touchEntity(e))
+    }
+
     private getEntityMetadata(target: EntityTarget<any>) {
         return this.em.connection.getMetadata(target)
     }
@@ -532,14 +526,5 @@ export class DeferredEntity<E extends EntityLiteral> {
         return this.store.getOrFail(this.target, this.opts)
     }
 
-    async getOrInsert(create: (id: string) => E | Promise<E>): Promise<E> {
-        return this.store.getOrInsert(this.target, this.opts, create)
-    }
 
-    /**
-     * @deprecated use {@link getOrInsert} instead
-     */
-    async getOrCreate(create: (id: string) => E | Promise<E>): Promise<E> {
-        return this.getOrInsert(create)
-    }
 }

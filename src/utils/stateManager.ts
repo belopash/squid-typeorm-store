@@ -1,9 +1,8 @@
 import {Logger} from '@subsquid/logger'
 import {unexpectedCase} from '@subsquid/util-internal'
 import assert from 'assert'
-import clone from 'fast-copy'
 import {DataSource, EntityMetadata, EntityTarget, FindOptionsRelations} from 'typeorm'
-import {CacheMap} from './cacheMap'
+import {CacheMap, isSnapshotDirty} from './cacheMap'
 import {EntityLiteral} from './misc'
 import {getMetadatasInCommitOrder} from './commitOrder'
 
@@ -26,6 +25,7 @@ export class StateManager {
     protected commitOrder: EntityMetadata[]
     protected commitOrderMap: Map<EntityMetadata, number>
     protected logger?: Logger
+    protected touchedIds: Map<EntityMetadata, Set<string>> = new Map()
 
     constructor({connection, logger}: {connection: DataSource; logger?: Logger}) {
         this.connection = connection
@@ -33,11 +33,28 @@ export class StateManager {
         this.cacheMap = new CacheMap(this.logger?.child('cache'))
         this.stateMap = new Map()
         this.commitOrder = getMetadatasInCommitOrder(connection)
-        // Pre-compute commit order indices for O(1) lookup
         this.commitOrderMap = new Map()
         this.commitOrder.forEach((metadata, index) => {
             this.commitOrderMap.set(metadata, index)
         })
+    }
+
+    touchEntity(entity: EntityLiteral): void {
+        const metadata = this.connection.getMetadata(entity.constructor)
+        let set = this.touchedIds.get(metadata)
+        if (set == null) {
+            set = new Set()
+            this.touchedIds.set(metadata, set)
+        }
+        set.add(entity.id)
+    }
+
+    needsSync(): boolean {
+        if (this.stateMap.size > 0) return true
+        for (const set of this.touchedIds.values()) {
+            if (set.size > 0) return true
+        }
+        return false
     }
 
     get<E extends EntityLiteral>(
@@ -53,45 +70,36 @@ export class StateManager {
         } else if (cached.value == null) {
             return null
         } else {
-            const entity = cached.value
-            const clonedEntity = metadata.create()
-
-            for (const column of metadata.nonVirtualColumns) {
-                const objectColumnValue = column.getEntityValue(entity)
-                if (objectColumnValue !== undefined) {
-                    column.setEntityValue(clonedEntity, clone(objectColumnValue))
-                }
-            }
+            const entity = cached.value as E
 
             if (relationMask != null) {
                 for (const relation of metadata.relations) {
-                    const inverseMask = relationMask[relation.propertyName]
+                    const inverseMask = (relationMask as Record<string, unknown>)[relation.propertyName]
                     if (!inverseMask) continue
 
-                    const inverseEntityMock = relation.getEntityValue(entity) as EntityLiteral
+                    const inverseEntityMock = relation.getEntityValue(entity) as EntityLiteral | null | undefined
 
                     if (inverseEntityMock === null) {
-                        relation.setEntityValue(clonedEntity, null)
+                        relation.setEntityValue(entity, null)
+                    } else if (inverseEntityMock === undefined) {
+                        return undefined
                     } else {
-                        const cachedInverseEntity =
-                            inverseEntityMock != null
-                                ? this.get(
-                                      relation.inverseEntityMetadata.target,
-                                      inverseEntityMock.id,
-                                      typeof inverseMask === 'boolean' ? undefined : inverseMask
-                                  )
-                                : undefined
+                        const cachedInverseEntity = this.get(
+                            relation.inverseEntityMetadata.target,
+                            inverseEntityMock.id,
+                            typeof inverseMask === 'boolean' ? undefined : inverseMask
+                        )
 
                         if (cachedInverseEntity === undefined) {
-                            return undefined // unable to build whole relation chain
+                            return undefined
                         } else {
-                            relation.setEntityValue(clonedEntity, cachedInverseEntity)
+                            relation.setEntityValue(entity, cachedInverseEntity)
                         }
                     }
                 }
             }
 
-            return clonedEntity
+            return entity
         }
     }
 
@@ -101,14 +109,14 @@ export class StateManager {
         switch (prevType) {
             case undefined:
                 this.setState(metadata, entity.id, ChangeType.Insert)
-                this.cacheMap.add(metadata, entity, {override: true, nullify: true})
+                this.cacheMap.add(metadata, entity)
                 break
             case ChangeType.Insert:
             case ChangeType.Upsert:
                 throw new Error(`Entity ${metadata.name} ${entity.id} is already marked as ${prevType}`)
             case ChangeType.Delete:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity, {override: true, nullify: true})
+                this.cacheMap.add(metadata, entity)
                 break
             default:
                 throw unexpectedCase(prevType)
@@ -122,14 +130,14 @@ export class StateManager {
             case undefined:
             case ChangeType.Upsert:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity, {override: true})
+                this.cacheMap.add(metadata, entity)
                 break
             case ChangeType.Insert:
-                this.cacheMap.add(metadata, entity, {override: true})
+                this.cacheMap.add(metadata, entity)
                 break
             case ChangeType.Delete:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity, {nullify: true, override: true})
+                this.cacheMap.add(metadata, entity)
                 break
             default:
                 throw unexpectedCase(prevType)
@@ -159,8 +167,8 @@ export class StateManager {
         if (typeof entity === 'string') {
             this.cacheMap.settle(metadata, entity)
         } else {
-            this.getChanges(metadata).delete(entity.id) // reset state
-            this.cacheMap.add(metadata, entity)
+            this.getChanges(metadata).delete(entity.id)
+            this.cacheMap.add(metadata, entity, {fromQuery: true})
         }
     }
 
@@ -188,14 +196,29 @@ export class StateManager {
         this.logger?.debug(`reset`)
         this.stateMap.clear()
         this.cacheMap.clear()
+        this.touchedIds.clear()
     }
 
-    isEmpty(): boolean {
-        return this.stateMap.size === 0
+    private applyAutoUpsertForTouched(): void {
+        for (const [metadata, ids] of this.touchedIds) {
+            for (const id of ids) {
+                const cached = this.cacheMap.get(metadata, id)
+                if (cached?.value == null) continue
+                if (!cached.loadedFromDb || cached.baseline == null) continue
+                if (this.getState(metadata, id) === ChangeType.Delete) continue
+                if (!isSnapshotDirty(metadata, cached.value, cached.baseline)) continue
+                this.upsert(cached.value)
+            }
+        }
+        this.touchedIds.clear()
     }
 
     async performUpdate(cb: (cs: ChangeSet[]) => Promise<void>) {
-        if (this.isEmpty()) return
+        if (!this.needsSync()) return
+
+        this.applyAutoUpsertForTouched()
+
+        if (this.stateMap.size === 0) return
 
         type PendingChanges = {
             metadata: EntityMetadata
@@ -278,6 +301,14 @@ export class StateManager {
         this.stateMap.clear()
 
         await cb(changeSets)
+
+        for (const cs of changeSets) {
+            if (cs.type === ChangeType.Insert || cs.type === ChangeType.Upsert) {
+                for (const e of cs.entities) {
+                    this.cacheMap.syncBaselineAfterWrite(this.connection.getMetadata(e.constructor), e)
+                }
+            }
+        }
     }
 
     private processEntityRelations(entity: EntityLiteral, changeType: ChangeType) {
@@ -337,7 +368,6 @@ export class StateManager {
             map = new Map()
             this.stateMap.set(metadata, map)
         }
-
         return map
     }
 }

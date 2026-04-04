@@ -7,7 +7,7 @@ import {getEntityManager, useDatabase} from './util'
 import {StateManager} from '../utils/stateManager'
 
 describe('Store', function () {
-    describe('.save()', function () {
+    describe('.track() (INSERT)', function () {
         useDatabase([
             `CREATE TABLE item (id text primary key , name text)`,
             `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`,
@@ -15,15 +15,23 @@ describe('Store', function () {
 
         it('get single entity', async function () {
             let store = await createStore()
-            await store.save(new Item('1', 'a'))
+            await store.track(new Item('1', 'a'))
             await expect(store.get(Item, '1')).resolves.toEqual({id: '1', name: 'a'})
+        })
+
+        it('get returns same instance as cache', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            const a = await store.get(Item, '1')
+            const b = await store.get(Item, '1')
+            expect(a).toBe(b)
         })
 
         it('get single entity with relation', async function () {
             let store = await createStore()
             const item = new Item('1', 'a')
-            await store.save(item)
-            await store.save(new Order({id: '1', qty: 1, item}))
+            await store.track(item)
+            await store.track(new Order({id: '1', qty: 1, item}))
             await expect(store.get(Order, {id: '1', relations: {item: true}})).resolves.toEqual({
                 id: '1',
                 qty: 1,
@@ -31,39 +39,80 @@ describe('Store', function () {
             })
         })
 
-        it('save single entity', async function () {
+        it('track single entity', async function () {
             let store = await createStore()
-            await store.save(new Item('1', 'a'))
+            await store.track(new Item('1', 'a'))
             await expect(getItems(store)).resolves.toEqual([{id: '1', name: 'a'}])
         })
 
-        it('save multiple entities', async function () {
+        it('track multiple entities', async function () {
             let store = await createStore()
-            await store.save([new Item('1', 'a'), new Item('2', 'b')])
+            await store.track([new Item('1', 'a'), new Item('2', 'b')])
             await expect(getItems(store)).resolves.toEqual([
                 {id: '1', name: 'a'},
                 {id: '2', name: 'b'},
             ])
         })
 
-        it('save a large amount of entities', async function () {
+        it('track a large amount of entities', async function () {
             let store = await createStore()
             let items: Item[] = []
             for (let i = 0; i < 20000; i++) {
                 items.push(new Item('' + i))
             }
-            await store.save(items)
+            await store.track(items)
             expect(await store.count(Item)).toEqual(items.length)
         })
+    })
 
-        it('updates', async function () {
+    describe('Auto upsert (touched + dirty)', function () {
+        useDatabase([
+            `CREATE TABLE item (id text primary key , name text)`,
+            `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`,
+        ])
+
+        it('updates loaded row via mutation without track({ replace: true })', async function () {
             let store = await createStore()
-            await store.save(new Item('1', 'a'))
-            await store.save([new Item('1', 'foo'), new Item('2', 'b')])
+            await store.track(new Item('1', 'a'))
+            const row1 = assertNotNull(await store.get(Item, '1'))
+            row1.name = 'foo'
+            await store.track(new Item('2', 'b'))
             await expect(getItems(store)).resolves.toEqual([
                 {id: '1', name: 'foo'},
                 {id: '2', name: 'b'},
             ])
+        })
+
+        it('does not call upsert for touched rows that are unchanged', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            await store.get(Item, '1')
+
+            let upsertCalls = 0
+            const em = (store as any).em
+            const origUpsert = em.upsert.bind(em)
+            em.upsert = async (...args: any[]) => {
+                upsertCalls++
+                return origUpsert(...args)
+            }
+
+            await store.sync()
+            expect(upsertCalls).toEqual(0)
+
+            em.upsert = origUpsert
+        })
+    })
+
+    describe('.track({ replace: true })', function () {
+        useDatabase([
+            `CREATE TABLE item (id text primary key , name text)`,
+            `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`,
+        ])
+
+        it('rejects a different instance for the same id', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            await expect(store.track(new Item('1', 'x'), {replace: true})).rejects.toThrow(/already in the store cache/)
         })
     })
 
@@ -110,11 +159,10 @@ describe('Store', function () {
             `INSERT INTO "order" (id, item_id, qty) values ('2', '2', 3)`,
         ])
 
-        it(".save() doesn't clear reference (single row update)", async function () {
+        it("auto upsert does not clear reference (single row update)", async function () {
             let store = await createStore()
             let order = assertNotNull(await store.get(Order, '1'))
             order.qty = 5
-            await store.save(order)
             let newOrder = await store.findOneOrFail(Order, {
                 where: {id: Equal('1')},
                 relations: {
@@ -125,15 +173,15 @@ describe('Store', function () {
             expect(newOrder.item.id).toEqual('1')
         })
 
-        it(".save() doesn't clear reference (multi row update)", async function () {
+        it("auto upsert does not clear reference (multi row update)", async function () {
             let store = await createStore()
-            let orders = await store.find(Order, {order: {id: 'ASC'}})
+            // Load items before orders so a sync does not drop Order ids from the touch set before mutation.
             let items = await store.find(Item, {order: {id: 'ASC'}})
+            let orders = await store.find(Order, {order: {id: 'ASC'}})
 
             orders[0].qty = 5
             orders[1].qty = 1
             orders[1].item = items[0]
-            await store.save(orders)
 
             let newOrders = await store.find(Order, {
                 relations: {
