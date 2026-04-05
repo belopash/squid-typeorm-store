@@ -1,4 +1,10 @@
-export {TypeormDatabase, TypeormDatabase as TypeormDatabaseWithCache, TypeormDatabaseOptions} from './database'
+export {
+    TypeormDatabase,
+    TypeormDatabase as TypeormDatabaseWithCache,
+    TypeormDatabaseOptions,
+    DatabaseTransactResult,
+    TemplateMutation,
+} from './database'
 export {
     EntityTarget,
     EntityLiteral,
