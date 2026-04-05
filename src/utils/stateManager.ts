@@ -130,14 +130,14 @@ export class StateManager {
             case undefined:
             case ChangeType.Upsert:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity)
+                this.cacheMap.add(metadata, entity, {overwrite: true})
                 break
             case ChangeType.Insert:
-                this.cacheMap.add(metadata, entity)
+                this.cacheMap.add(metadata, entity, {overwrite: true})
                 break
             case ChangeType.Delete:
                 this.setState(metadata, entity.id, ChangeType.Upsert)
-                this.cacheMap.add(metadata, entity)
+                this.cacheMap.add(metadata, entity, {overwrite: true})
                 break
             default:
                 throw unexpectedCase(prevType)

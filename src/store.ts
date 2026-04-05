@@ -76,7 +76,12 @@ export interface StoreOptions {
 
 export interface TrackOptions {
     /**
-     * When `true`, register for SQL upsert (`ON CONFLICT` update). When omitted or `false`, register for `INSERT` only.
+     * When `true`, the entity is registered for SQL upsert (`INSERT … ON CONFLICT UPDATE`) instead of a plain
+     * `INSERT`, and any previously cached instance for the same id is replaced with the supplied object.
+     *
+     * When omitted or `false`, a plain `INSERT` is used. Passing a different object for an id that is already
+     * in the cache will throw — use {@link Store.getOrCreate} or {@link Store.get} / {@link Store.find} to
+     * obtain the canonical cached instance and mutate it in place.
      */
     replace?: boolean
 }
@@ -156,8 +161,9 @@ export class Store {
      * Rows loaded via {@link get} / {@link find} / {@link findOne} are **touched**; if they differ from the baseline
      * captured at load time, they are upserted automatically on the next sync (no `replace` needed).
      *
-     * Pass `{ replace: true }` to force upsert for the given instances (e.g. different object for the same id, or
-     * when you must queue an upsert without a prior read in the same batch).
+     * Pass `{ replace: true }` to force SQL upsert (`INSERT … ON CONFLICT UPDATE`) and to allow replacing a
+     * previously cached instance with the supplied object. Without `replace`, passing a different object for an
+     * id that is already in the cache will throw.
      */
     async track<E extends EntityLiteral>(e: E | E[], options?: TrackOptions): Promise<void> {
         return await this.performWrite(() => {

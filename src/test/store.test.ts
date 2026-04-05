@@ -123,10 +123,47 @@ describe('Store', function () {
             `CREATE TABLE "order" (id text primary key, item_id text REFERENCES item, qty int4)`,
         ])
 
-        it('rejects a different instance for the same id', async function () {
+        it('replaces a different cached instance without throwing', async function () {
             let store = await createStore()
             await store.track(new Item('1', 'a'))
-            await expect(store.track(new Item('1', 'x'), {replace: true})).rejects.toThrow(/already in the store cache/)
+            await expect(store.track(new Item('1', 'x'), {replace: true})).resolves.toBeUndefined()
+        })
+
+        it('get() returns the replacement instance after overwrite', async function () {
+            let store = await createStore()
+            const original = new Item('1', 'a')
+            await store.track(original)
+            const replacement = new Item('1', 'x')
+            await store.track(replacement, {replace: true})
+            const cached = await store.get(Item, '1')
+            expect(cached).toBe(replacement)
+        })
+
+        it('writes the replacement value to the database (upsert)', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            await store.track(new Item('1', 'x'), {replace: true})
+            await expect(getItems(store)).resolves.toEqual([{id: '1', name: 'x'}])
+        })
+
+        it('works for a brand-new id (no prior cached instance)', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'), {replace: true})
+            await expect(getItems(store)).resolves.toEqual([{id: '1', name: 'a'}])
+        })
+
+        it('plain track() still throws on a duplicate id', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            await expect(store.track(new Item('1', 'x'))).rejects.toThrow(/already marked as/)
+        })
+
+        it('replaces after a delete→upsert transition', async function () {
+            let store = await createStore()
+            await store.track(new Item('1', 'a'))
+            await store.delete(Item, '1')
+            await store.track(new Item('1', 'z'), {replace: true})
+            await expect(getItems(store)).resolves.toEqual([{id: '1', name: 'z'}])
         })
     })
 

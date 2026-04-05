@@ -77,9 +77,12 @@ export class CacheMap {
      * `fromQuery` — the entity came from a TypeORM query; replaces any existing
      * instance and captures a baseline snapshot for dirty detection.
      *
-     * Without `fromQuery`, a *different* object for an already-cached id throws.
+     * `overwrite` — the caller explicitly requested upsert semantics (`replace: true`);
+     * replaces any existing instance without touching `loadedFromDb` / `baseline`.
+     *
+     * Without either flag, a *different* object for an already-cached id throws.
      */
-    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, opts?: {fromQuery?: boolean}): void {
+    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, opts?: {fromQuery?: boolean; overwrite?: boolean}): void {
         const cacheMap = this.getEntityCache(metadata)
 
         let cached = cacheMap.get(entity.id)
@@ -108,9 +111,16 @@ export class CacheMap {
             return
         }
 
+        if (opts?.overwrite) {
+            cached.value = entity
+            this.logger?.debug(`replaced entity (overwrite) ${metadata.name} ${entity.id}`)
+            return
+        }
+
         throw new Error(
             `Entity ${metadata.name} ${entity.id} is already in the store cache with a different object instance. ` +
-                `Mutate and track(..., { replace: true }) with the instance from get() or find(), or use track() for new ids.`
+                `Use getOrCreate() to obtain or create the canonical instance, or fetch it with get()/find() and mutate it in place. ` +
+                `To intentionally replace a cached instance, pass { replace: true } to track().`
         )
     }
 
