@@ -313,6 +313,9 @@ export class TypeormDatabase {
             if (result?.templates) {
                 await templateRegistry.persist(result.templates)
             }
+        } catch (e) {
+            store.reset()
+            throw e
         } finally {
             store['isClosed'] = true
         }
