@@ -3,7 +3,7 @@ import {EntityLiteral} from './misc'
 import {Logger} from '@subsquid/logger'
 
 export function captureColumnSnapshot(metadata: EntityMetadata, entity: EntityLiteral): unknown[] {
-    return metadata.nonVirtualColumns.map((col) => col.getEntityValue(entity))
+    return metadata.nonVirtualColumns.map((col) => col.getEntityValue(entity, true))
 }
 
 function valuesEqual(a: unknown, b: unknown): boolean {
@@ -15,7 +15,7 @@ function valuesEqual(a: unknown, b: unknown): boolean {
 export function isSnapshotDirty(metadata: EntityMetadata, entity: EntityLiteral, baseline: unknown[]): boolean {
     const cols = metadata.nonVirtualColumns
     for (let i = 0; i < baseline.length; i++) {
-        if (!valuesEqual(baseline[i], cols[i].getEntityValue(entity))) return true
+        if (!valuesEqual(baseline[i], cols[i].getEntityValue(entity, true))) return true
     }
     return false
 }

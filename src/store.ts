@@ -534,5 +534,7 @@ export class DeferredEntity<E extends EntityLiteral> {
         return this.store.getOrFail(this.target, this.opts)
     }
 
-
+    async getOrCreate(create: (id: string) => E | Promise<E>): Promise<E> {
+        return this.store.getOrCreate(this.target, this.opts, create)
+    }
 }

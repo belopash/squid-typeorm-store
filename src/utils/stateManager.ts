@@ -210,7 +210,9 @@ export class StateManager {
                 this.upsert(cached.value)
             }
         }
-        this.touchedIds.clear()
+        // touchedIds is intentionally NOT cleared here. Clearing happens only in reset()
+        // so that mutations made after an intermediate sync() (triggered by a read) are
+        // still detected when the final flush() runs.
     }
 
     async performUpdate(cb: (cs: ChangeSet[]) => Promise<void>) {

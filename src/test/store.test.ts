@@ -101,6 +101,38 @@ describe('Store', function () {
 
             em.upsert = origUpsert
         })
+
+        it('persists a mutation made after an intermediate sync triggered by a read', async function () {
+            // Regression: applyAutoUpsertForTouched() used to clear touchedIds on every
+            // sync, not just on reset(). A read issued after the entity was loaded (but
+            // before it was mutated) would fire an intermediate sync that evicted the
+            // entity from touchedIds; the subsequent mutation was then invisible to the
+            // final flush() and silently lost.
+            let store = await createStore()
+
+            await store.track(new Item('1', 'original'))
+            await store.track(new Item('2', 'other'))
+
+            // Load item1 — adds it to touchedIds with baseline 'original'.
+            const item1 = assertNotNull(await store.get(Item, '1'))
+
+            // A second read triggers an intermediate sync().
+            // item1 is not dirty yet, so it is not upserted, but it IS evicted from
+            // touchedIds by the (now-removed) premature clear.
+            await store.get(Item, '2')
+
+            // Mutation happens AFTER the intermediate sync.
+            item1.name = 'mutated'
+
+            // flush() must detect the mutation and write it.
+            await store.flush()
+
+            const rows = await store.find(Item, {where: {}, order: {id: 'ASC'}})
+            expect(rows).toEqual([
+                {id: '1', name: 'mutated'},
+                {id: '2', name: 'other'},
+            ])
+        })
     })
 
     describe('get cached null (non-existent entity)', function () {
