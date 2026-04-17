@@ -229,26 +229,32 @@ export class TypeormDatabase {
             }
 
             if (info.newBlocks.length) {
-                let finalizedEnd = info.newBlocks.findIndex((b) => b.height > info.finalizedHead.height)
-                if (finalizedEnd < 0) {
-                    finalizedEnd = info.newBlocks.length
+                let unfinalizedStart = info.newBlocks.findIndex((b) => b.height > info.finalizedHead.height)
+                if (unfinalizedStart < 0) {
+                    unfinalizedStart = info.newBlocks.length
                 }
-                if (finalizedEnd > 0) {
+                if (unfinalizedStart > 0) {
                     await this.performUpdates(
-                        (store) => cb(store, 0, finalizedEnd),
+                        async (store) => cb(store, 0, unfinalizedStart),
                         em,
                         new TemplateRegistryTracker(em, this.statusSchema, info.finalizedHead.height)
                     )
                 }
-                for (let i = finalizedEnd; i < info.newBlocks.length; i++) {
-                    let b = info.newBlocks[i]
-                    await this.insertHotBlock(em, b)
-                    await this.performUpdates(
-                        (store) => cb(store, i, i + 1),
-                        em,
-                        new TemplateRegistryTracker(em, this.statusSchema, b.height),
-                        new ChangeTracker(em, this.statusSchema, b.height)
-                    )
+                if (unfinalizedStart < info.newBlocks.length) {
+                    // To prevent transaction timeouts when handling many unfinalized blocks,
+                    // we group them instead of handling each block individually.
+                    let groupSize = Math.max(1, Math.floor((info.newBlocks.length - unfinalizedStart) / 100))
+                    for (let i = unfinalizedStart; i < info.newBlocks.length; i += groupSize) {
+                        let sliceEnd = Math.min(i + groupSize, info.newBlocks.length)
+                        let lastBlock = info.newBlocks[sliceEnd - 1]
+                        await this.insertHotBlock(em, lastBlock)
+                        await this.performUpdates(
+                            async (store) => cb(store, i, sliceEnd),
+                            em,
+                            new TemplateRegistryTracker(em, this.statusSchema, lastBlock.height),
+                            new ChangeTracker(em, this.statusSchema, lastBlock.height)
+                        )
+                    }
                 }
             }
 
