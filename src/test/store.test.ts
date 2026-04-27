@@ -102,6 +102,43 @@ describe('Store', function () {
             em.upsert = origUpsert
         })
 
+        it('preserves canonical instance and mutations across a JOIN re-traversal', async function () {
+            // Regression: cacheMap.add({fromQuery: true}) used to replace an
+            // already-cached instance with a freshly-loaded one and reset its
+            // baseline. Concurrent reads (e.g. defer().get() racing against
+            // find(..., relations: {x: true})) hand a reference to user code
+            // before the JOIN-loaded graph traverses through state.persist and
+            // overwrites the cache slot. The user's mutation on the original
+            // reference would then be silently dropped at sync time because
+            // dirty-detection ran against the fresh DB snapshot of the
+            // replacement instance.
+            let store = await createStore()
+            const seedItem = new Item('1', 'a')
+            await store.track(seedItem)
+            await store.track(new Order({id: '1', qty: 3, item: seedItem}))
+            await store.flush()
+            store.reset()
+
+            // First load: caches Item '1' as the canonical instance with
+            // baseline = snapshot('a'). Returns the canonical reference.
+            const item = assertNotNull(await store.get(Item, '1'))
+            expect(item.name).toEqual('a')
+
+            // Second load: TypeORM returns a *different* Item instance via the
+            // JOIN. Without the fix, traverseEntity → state.persist would
+            // replace the cached instance and reset baseline, hiding the
+            // upcoming mutation.
+            await store.find(Order, {where: {}, relations: {item: true}})
+
+            // Mutation on the original (canonical) reference.
+            item.name = 'mutated'
+
+            await store.flush()
+
+            const rows = await store.find(Item, {where: {}, cacheEntities: false})
+            expect(rows).toEqual([{id: '1', name: 'mutated'}])
+        })
+
         it('persists a mutation made after an intermediate sync triggered by a read', async function () {
             // Regression: applyAutoUpsertForTouched() used to clear touchedIds on every
             // sync, not just on reset(). A read issued after the entity was loaded (but
