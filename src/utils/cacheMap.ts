@@ -74,8 +74,13 @@ export class CacheMap {
     /**
      * Store `entity` as the canonical instance for its id.
      *
-     * `fromQuery` — the entity came from a TypeORM query; replaces any existing
-     * instance and captures a baseline snapshot for dirty detection.
+     * `fromQuery` — the entity came from a TypeORM query. If no instance is cached yet,
+     * stores it and captures a baseline snapshot for dirty detection. If a different
+     * instance is already cached, the cached one is kept (it may be a reference already
+     * handed back to user code in a concurrent read); the baseline is only refreshed
+     * when that cached instance is still clean (no in-memory mutations vs. its baseline).
+     * This avoids silently dropping mutations made through one reference when a parallel
+     * `find()` re-loads the same row through a JOIN and traverses it through `persist`.
      *
      * `overwrite` — the caller explicitly requested upsert semantics (`replace: true`);
      * replaces any existing instance without touching `loadedFromDb` / `baseline`.
@@ -104,10 +109,23 @@ export class CacheMap {
         if (cached.value === entity) return
 
         if (opts?.fromQuery) {
-            cached.value = entity
+            // Preserve the canonical cached instance: a concurrent reader may already
+            // hold a reference to it and be about to mutate it. Replacing it here would
+            // silently drop those mutations and reset the baseline to the freshly-loaded
+            // (untouched) row, so dirty-detection at sync time would miss the change.
+            const cachedValue = cached.value
+            const cachedClean =
+                cached.loadedFromDb &&
+                cached.baseline != null &&
+                !isSnapshotDirty(metadata, cachedValue, cached.baseline)
+            if (cachedClean || !cached.loadedFromDb) {
+                // Cached instance has no pending in-memory mutations (or has never been
+                // associated with a DB baseline at all). Safe to align baseline to the
+                // latest DB read so future dirty detection works against fresh data.
+                cached.baseline = captureColumnSnapshot(metadata, cachedValue)
+            }
             cached.loadedFromDb = true
-            cached.baseline = captureColumnSnapshot(metadata, entity)
-            this.logger?.debug(`replaced entity from query ${metadata.name} ${entity.id}`)
+            this.logger?.debug(`refreshed entity from query ${metadata.name} ${entity.id}`)
             return
         }
 
