@@ -294,10 +294,10 @@ export class Store {
         return await this.performRead(async () => {
             const {cacheEntities, ...opts} = options
 
-            const res = await this.em.find(target, opts)
+            let res = await this.em.find(target, opts)
             if (cacheEntities ?? this.cacheEntities) {
+                res = res.map((e) => this.cacheEntity(target, e) ?? e)
                 for (const e of res) {
-                    this.cacheEntity(target, e)
                     this.touchReturnedGraph(e)
                 }
             }
@@ -320,10 +320,10 @@ export class Store {
         return await this.performRead(async () => {
             const {cacheEntities, ...opts} = options
 
-            const res = await this.em.findOne(target, opts).then(noNull)
+            let res = await this.em.findOne(target, opts).then(noNull)
             if (cacheEntities ?? this.cacheEntities) {
                 const idOrEntity = res || getIdFromWhere(options.where)
-                this.cacheEntity(target, idOrEntity)
+                res = this.cacheEntity(target, idOrEntity) ?? res
                 if (res != null) {
                     this.touchReturnedGraph(res)
                 }
@@ -469,14 +469,46 @@ export class Store {
         assert(!this.isClosed, `too late to perform db updates, make sure you haven't forgot to await on db query`)
     }
 
-    private cacheEntity<E extends EntityLiteral>(target: EntityTarget<E>, entityOrId?: E | string) {
+    private cacheEntity<E extends EntityLiteral>(target: EntityTarget<E>, entityOrId?: E | string): E | undefined {
         if (entityOrId == null) return
 
         if (typeof entityOrId === 'string') {
             this.state.persist(target, entityOrId)
+            return
         } else {
-            this.traverseEntity(entityOrId, (e, md) => this.state.persist(md.target, e))
+            return this.persistReturnedGraph(entityOrId)
         }
+    }
+
+    private persistReturnedGraph<E extends EntityLiteral>(entity: E): E {
+        const metadata = this.getEntityMetadata(entity.constructor)
+
+        for (const relation of metadata.relations) {
+            const inverseEntity = relation.getEntityValue(entity)
+            if (inverseEntity === undefined) continue
+
+            if (inverseEntity === null) {
+                continue
+            } else if (relation.isOneToMany || relation.isManyToMany) {
+                relation.setEntityValue(
+                    entity,
+                    inverseEntity.map((ie: EntityLiteral) => this.persistReturnedGraph(ie))
+                )
+            } else {
+                relation.setEntityValue(entity, this.persistReturnedGraph(inverseEntity))
+            }
+        }
+
+        const canonical = this.state.persist(metadata.target, entity) as E
+        if (canonical !== entity) {
+            for (const relation of metadata.relations) {
+                const inverseEntity = relation.getEntityValue(entity)
+                if (inverseEntity === undefined) continue
+                if (relation.getEntityValue(canonical) !== undefined) continue
+                relation.setEntityValue(canonical, inverseEntity)
+            }
+        }
+        return canonical
     }
 
     private touchReturnedGraph(entity: EntityLiteral | null | undefined): void {

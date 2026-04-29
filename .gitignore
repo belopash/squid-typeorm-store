@@ -1,6 +1,7 @@
 /node_modules
 /lib
 /builds
+/.codex
 
 /**Versions.json
 
@@ -9,4 +10,3 @@
 /.vscode
 
 /*.log
-

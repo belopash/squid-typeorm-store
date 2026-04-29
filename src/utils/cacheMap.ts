@@ -20,6 +20,12 @@ export function isSnapshotDirty(metadata: EntityMetadata, entity: EntityLiteral,
     return false
 }
 
+function copyColumnValues(metadata: EntityMetadata, from: EntityLiteral, to: EntityLiteral): void {
+    for (const col of metadata.nonVirtualColumns) {
+        col.setEntityValue(to, col.getEntityValue(from))
+    }
+}
+
 export class CachedEntity<E extends EntityLiteral = EntityLiteral> {
     value: E | null = null
     loadedFromDb = false
@@ -76,18 +82,19 @@ export class CacheMap {
      *
      * `fromQuery` — the entity came from a TypeORM query. If no instance is cached yet,
      * stores it and captures a baseline snapshot for dirty detection. If a different
-     * instance is already cached, the cached one is kept (it may be a reference already
-     * handed back to user code in a concurrent read); the baseline is only refreshed
-     * when that cached instance is still clean (no in-memory mutations vs. its baseline).
-     * This avoids silently dropping mutations made through one reference when a parallel
-     * `find()` re-loads the same row through a JOIN and traverses it through `persist`.
+     * instance is already cached, the cached one remains canonical (it may be a reference
+     * already handed back to user code in a concurrent read) and is returned to the caller.
+     * Clean cached instances are refreshed from the query row; dirty cached instances keep
+     * their in-memory mutations. This avoids silently dropping mutations made through one
+     * reference when a parallel `find()` re-loads the same row through a JOIN and traverses
+     * it through `persist`.
      *
      * `overwrite` — the caller explicitly requested upsert semantics (`replace: true`);
      * replaces any existing instance without touching `loadedFromDb` / `baseline`.
      *
      * Without either flag, a *different* object for an already-cached id throws.
      */
-    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, opts?: {fromQuery?: boolean; overwrite?: boolean}): void {
+    add<E extends EntityLiteral>(metadata: EntityMetadata, entity: E, opts?: {fromQuery?: boolean; overwrite?: boolean}): E {
         const cacheMap = this.getEntityCache(metadata)
 
         let cached = cacheMap.get(entity.id)
@@ -103,36 +110,34 @@ export class CacheMap {
                 cached.baseline = captureColumnSnapshot(metadata, entity)
             }
             this.logger?.debug(`added entity ${metadata.name} ${entity.id}`)
-            return
+            return entity
         }
 
-        if (cached.value === entity) return
+        if (cached.value === entity) return entity
 
         if (opts?.fromQuery) {
-            // Preserve the canonical cached instance: a concurrent reader may already
-            // hold a reference to it and be about to mutate it. Replacing it here would
-            // silently drop those mutations and reset the baseline to the freshly-loaded
-            // (untouched) row, so dirty-detection at sync time would miss the change.
+            // Preserve the canonical cached instance: a concurrent reader may already hold
+            // a reference to it and be about to mutate it. Replacing it here would silently
+            // drop those mutations. Return the canonical instance so query callers mutate a
+            // tracked object even when TypeORM loaded a fresh duplicate for the same row.
             const cachedValue = cached.value
             const cachedClean =
                 cached.loadedFromDb &&
                 cached.baseline != null &&
                 !isSnapshotDirty(metadata, cachedValue, cached.baseline)
             if (cachedClean || !cached.loadedFromDb) {
-                // Cached instance has no pending in-memory mutations (or has never been
-                // associated with a DB baseline at all). Safe to align baseline to the
-                // latest DB read so future dirty detection works against fresh data.
+                copyColumnValues(metadata, entity, cachedValue)
                 cached.baseline = captureColumnSnapshot(metadata, cachedValue)
             }
             cached.loadedFromDb = true
             this.logger?.debug(`refreshed entity from query ${metadata.name} ${entity.id}`)
-            return
+            return cachedValue as E
         }
 
         if (opts?.overwrite) {
             cached.value = entity
             this.logger?.debug(`replaced entity (overwrite) ${metadata.name} ${entity.id}`)
-            return
+            return entity
         }
 
         throw new Error(

@@ -162,13 +162,15 @@ export class StateManager {
         }
     }
 
-    persist(target: EntityTarget<any>, entity: EntityLiteral | string) {
+    persist(target: EntityTarget<any>, id: string): void
+    persist<E extends EntityLiteral>(target: EntityTarget<any>, entity: E): E
+    persist<E extends EntityLiteral>(target: EntityTarget<any>, entity: E | string): E | void {
         const metadata = this.connection.getMetadata(target)
         if (typeof entity === 'string') {
             this.cacheMap.settle(metadata, entity)
         } else {
             this.getChanges(metadata).delete(entity.id)
-            this.cacheMap.add(metadata, entity, {fromQuery: true})
+            return this.cacheMap.add(metadata, entity, {fromQuery: true}) as E
         }
     }
 

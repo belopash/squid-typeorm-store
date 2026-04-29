@@ -139,6 +139,26 @@ describe('Store', function () {
             expect(rows).toEqual([{id: '1', name: 'mutated'}])
         })
 
+        it('returns tracked canonical instances from later queries', async function () {
+            let store = await createStore()
+            const seedItem = new Item('1', 'a')
+            await store.track(seedItem)
+            await store.track(new Order({id: '1', qty: 3, item: seedItem}))
+            await store.flush()
+            store.reset()
+
+            const item = assertNotNull(await store.get(Item, '1'))
+            const orders = await store.find(Order, {where: {}, relations: {item: true}})
+
+            expect(orders[0].item).toBe(item)
+
+            orders[0].item.name = 'mutated-through-query-result'
+            await store.flush()
+
+            const rows = await store.find(Item, {where: {}, cacheEntities: false})
+            expect(rows).toEqual([{id: '1', name: 'mutated-through-query-result'}])
+        })
+
         it('persists a mutation made after an intermediate sync triggered by a read', async function () {
             // Regression: applyAutoUpsertForTouched() used to clear touchedIds on every
             // sync, not just on reset(). A read issued after the entity was loaded (but
