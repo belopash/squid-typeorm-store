@@ -1,6 +1,5 @@
 # Publishes via npm trusted publishing (OIDC). Configure the publisher on npmjs.com
 # (package → Access → Trusted Publisher): repo belopash/squid-typeorm-store, workflow publish.yml.
-# Requires Node ≥22.14 and npm ≥11.5.1. Remove NPM_AUTH_TOKEN after verifying a successful run.
 name: publish
 on:
   workflow_dispatch: # manually run
@@ -25,6 +24,20 @@ jobs:
   publish:
     name: Publish
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_DB: defaultdb
+          POSTGRES_USER: root
+          POSTGRES_PASSWORD: root
+        ports:
+          - 27436:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,17 +45,9 @@ jobs:
       - name: Use Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
           registry-url: https://registry.npmjs.org
-
-      - name: Install npm (trusted publishing)
-        run: npm install -g npm@^11.5.1
-
-      - name: Configure git
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
 
       - name: Install dependencies
         run: npm ci
@@ -55,6 +60,5 @@ jobs:
           npm pack --dry-run
           npm run test
 
-      # OIDC auth is automatic on GitHub-hosted runners; provenance is added by the registry.
       - name: Publish to npm
-        run: npm publish --tag ${{ github.event.inputs.releaseTag }} --access public
+        run: npm publish --provenance --tag ${{ github.event.inputs.releaseTag }} --access public
