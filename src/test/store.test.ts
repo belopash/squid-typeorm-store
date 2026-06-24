@@ -1,12 +1,99 @@
-import {assertNotNull} from '@subsquid/util-internal'
+import {assertNotNull, createFuture} from '@subsquid/util-internal'
 import expect from 'expect'
-import {Equal} from 'typeorm'
+import {DataSource, Equal} from 'typeorm'
 import {Store} from '../store'
 import {Item, Order} from './lib/model'
 import {getEntityManager, useDatabase} from './util'
 import {StateManager} from '../utils/stateManager'
 
+class ReentrantSyncStateManager extends StateManager {
+    private syncNeeded = true
+
+    constructor(
+        connection: DataSource,
+        private readonly onPerformUpdate: () => Promise<void>
+    ) {
+        super({connection})
+    }
+
+    needsSync(): boolean {
+        return this.syncNeeded
+    }
+
+    async performUpdate(cb: Parameters<StateManager['performUpdate']>[0]): Promise<void> {
+        await this.onPerformUpdate()
+        this.syncNeeded = false
+        await cb([])
+    }
+}
+
+class BlockingSyncStateManager extends StateManager {
+    private syncNeeded = true
+    readonly updateStarted = createFuture<void>()
+    readonly releaseUpdate = createFuture<void>()
+
+    needsSync(): boolean {
+        return this.syncNeeded
+    }
+
+    async performUpdate(cb: Parameters<StateManager['performUpdate']>[0]): Promise<void> {
+        this.syncNeeded = false
+        this.updateStarted.resolve()
+        await this.releaseUpdate.promise()
+        await cb([])
+    }
+}
+
 describe('Store', function () {
+    it('does not deadlock when sync is requested while sync is already in progress', async function () {
+        const dataSource = new DataSource({type: 'postgres', entities: []})
+        let store: Store
+        let nestedSyncReturned = false
+        const state = new ReentrantSyncStateManager(dataSource, async () => {
+            await store.sync()
+            nestedSyncReturned = true
+        })
+        store = new Store({
+            em: dataSource.manager,
+            state,
+            postponeWriteOperations: true,
+            cacheEntities: true,
+        })
+
+        // #given a store whose state requests another sync during performUpdate
+        const timeout = new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), 100))
+        // #when sync is called while the outer sync still holds pendingSync
+        const result = await Promise.race([store.sync().then(() => 'synced' as const), timeout])
+        // #then the nested sync returns without waiting on its own lock
+        expect(result).toEqual('synced')
+        expect(nestedSyncReturned).toEqual(true)
+    })
+
+    it('waits for an active sync even when no new changes remain', async function () {
+        const dataSource = new DataSource({type: 'postgres', entities: []})
+        const state = new BlockingSyncStateManager({connection: dataSource})
+        const store = new Store({
+            em: dataSource.manager,
+            state,
+            postponeWriteOperations: true,
+            cacheEntities: true,
+        })
+
+        // #given an outer sync has started and consumed the pending state
+        const outerSync = store.sync()
+        await state.updateStarted.promise()
+
+        // #when another caller asks to sync before the outer sync has finished
+        const concurrentSync = store.sync()
+        const beforeRelease = await completesWithin(() => concurrentSync)
+
+        // #then it still waits for the active sync instead of returning early
+        expect(beforeRelease).toEqual('timed-out')
+        state.releaseUpdate.resolve()
+        await outerSync
+        await concurrentSync
+    })
+
     describe('.track() (INSERT)', function () {
         useDatabase([
             `CREATE TABLE item (id text primary key , name text)`,
@@ -368,4 +455,11 @@ export async function getItems(store: Store): Promise<Item[]> {
 
 export function getItemIds(store: Store): Promise<string[]> {
     return getItems(store).then((items) => items.map((it) => it.id).sort())
+}
+
+function completesWithin(fn: () => Promise<void>): Promise<'completed' | 'timed-out'> {
+    return Promise.race([
+        fn().then(() => 'completed' as const),
+        new Promise<'timed-out'>((resolve) => setTimeout(() => resolve('timed-out'), 100)),
+    ])
 }

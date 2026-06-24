@@ -14,6 +14,7 @@ import {Logger} from '@subsquid/logger'
 import {EntityLiteral, noNull, splitIntoBatches} from './utils/misc'
 import type {ColumnMetadata} from 'typeorm/metadata/ColumnMetadata'
 import assert from 'assert'
+import {AsyncLocalStorage} from 'async_hooks'
 import {EntityClass} from '@subsquid/typeorm-store'
 import {DeferList} from './utils/deferList'
 import {Mutex} from './utils/mutex'
@@ -101,6 +102,11 @@ export class Store {
 
     protected pendingSync: Mutex
     protected pendingLoad: Mutex
+    protected activeSync?: {
+        token: symbol
+        promise: Promise<void>
+    }
+    protected syncContext = new AsyncLocalStorage<symbol>()
     protected isClosed = false
 
     constructor({em, changes, logger, state, ...opts}: StoreOptions) {
@@ -420,11 +426,31 @@ export class Store {
     }
 
     async sync(): Promise<void> {
+        const activeSync = this.activeSync
+        if (activeSync != null) {
+            if (this.syncContext.getStore() === activeSync.token) return
+            return await activeSync.promise
+        }
+
         // no need to acquire lock if there are no changes
         if (!this.state.needsSync()) return
 
+        const token = Symbol('sync')
+        const promise = this.syncContext.run(token, () => this.performSync())
+        this.activeSync = {token, promise}
+        try {
+            return await promise
+        } finally {
+            if (this.activeSync?.token === token) {
+                this.activeSync = undefined
+            }
+        }
+    }
+
+    private async performSync(): Promise<void> {
         await this.pendingSync.acquire()
         try {
+            if (!this.state.needsSync()) return
             await this.state.performUpdate(async (changeSets) => {
                 for (const cs of changeSets) {
                     switch (cs.type) {
